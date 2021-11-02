@@ -7,15 +7,6 @@
 #define INVALID_LPN     (~(0ULL))
 #define UNMAPPED_PPA    (~(0ULL))
 
-
-// DZ Start
-// Define I/O operations
-#define READ_OP    0
-#define WRITE_OP   1
-#define FLUSH_OP   2
-#define DISCARD_OP 3
-// DZ End
-
 enum {
     NAND_READ =  0,
     NAND_WRITE = 1,
@@ -24,10 +15,6 @@ enum {
     NAND_READ_LATENCY = 40000,
     NAND_PROG_LATENCY = 200000,
     NAND_ERASE_LATENCY = 2000000,
-    // DZ Start
-    // Define fast programming latency
-    NAND_FAST_PROG_LATENCY = 150000,
-    // DZ End
 };
 
 enum {
@@ -79,18 +66,6 @@ struct ppa {
         } g;
 
         uint64_t ppa;
-        // DZ Start
-        // Define structure for death time analysis
-
-        // Previously calculated average
-        float16 death_time_avg;
-        // Previous access timestamp
-        float16 last_access_time;
-        // Previous access I/O operation
-        // Can be READ_OP, WRITE_OP, FLUSH_OP or DISCARD_OP
-        float16 last_access_op;
-
-        // DZ End
     };
 };
 
