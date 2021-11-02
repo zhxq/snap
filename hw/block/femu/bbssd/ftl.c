@@ -25,6 +25,37 @@ static inline void set_maptbl_ent(struct ssd *ssd, uint64_t lpn, struct ppa *ppa
     ssd->maptbl[lpn] = *ppa;
 }
 
+
+static inline uint64_t set_latest_access_time(struct ssd *ssd, uint64_t lpn, int op)
+{
+    ftl_log("Setting latest access time.");
+    uint64_t prediction;
+    if (ssd->death_time_list[lpn].valid){
+        if (op == WRITE_OP){
+            prediction = ssd->death_time_list[lpn].death_time_avg;
+        }else{
+            prediction = -2;
+        }
+        // Only consider W->W and W->D as death. Update death time avg in this case
+        if (ssd->death_time_list[lpn].last_access_op == WRITE_OP){
+            if (ssd->death_time_list[lpn].death_time_avg > 0){
+                ssd->death_time_list[lpn].death_time_avg = ssd->death_time_list[lpn].death_time_avg * (1 - DECAY) + (qemu_clock_get_ns(QEMU_CLOCK_REALTIME) - ssd->death_time_list[lpn].last_access_time) * DECAY;
+            }else{
+                ssd->death_time_list[lpn].death_time_avg = qemu_clock_get_ns(QEMU_CLOCK_REALTIME) - ssd->death_time_list[lpn].last_access_time;
+            }
+        }
+    }else{
+        prediction = -1;
+        if (op == WRITE_OP){
+            ssd->death_time_list[lpn].valid = true;
+            ssd->death_time_list[lpn].last_access_op = op;
+            ssd->death_time_list[lpn].last_access_time = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+            ssd->death_time_list[lpn].death_time_avg = 0;
+        }
+    }
+    return prediction;
+}
+
 static uint64_t ppa2pgidx(struct ssd *ssd, struct ppa *ppa)
 {
     struct ssdparams *spp = &ssd->sp;
@@ -350,6 +381,17 @@ static void ssd_init_maptbl(struct ssd *ssd)
     }
 }
 
+static void ssd_init_death_time(struct ssd *ssd)
+{
+    struct ssdparams *spp = &ssd->sp;
+
+    ssd->death_time_list = g_malloc0(sizeof(struct death_time_track) * spp->tt_pgs);
+    for (int i = 0; i < spp->tt_pgs; i++) {
+        ssd->death_time_list[i].valid = false;
+        ssd->death_time_list[i].death_time_avg = 0;
+    }
+}
+
 static void ssd_init_rmap(struct ssd *ssd)
 {
     struct ssdparams *spp = &ssd->sp;
@@ -377,6 +419,9 @@ void ssd_init(FemuCtrl *n)
 
     /* initialize maptbl */
     ssd_init_maptbl(ssd);
+
+    /* initialize death_time */
+    ssd_init_death_time(ssd);
 
     /* initialize rmap */
     ssd_init_rmap(ssd);
@@ -833,7 +878,10 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
             mark_page_invalid(ssd, &ppa);
             set_rmap_ent(ssd, INVALID_LPN, &ppa);
         }
-
+        // DZ Start
+        // This is a write. Update death time and average.
+        set_latest_access_time(ssd, lpn, WRITE_OP);
+        // DZ End
         /* new write */
         ppa = get_new_page(ssd);
         /* update maptbl */
@@ -895,6 +943,10 @@ static void *ftl_thread(void *arg)
                 break;
             case NVME_CMD_DSM:
                 lat = 0;
+                // DZ Start
+                // TODO: Put discard request here
+                
+                // DZ End
                 break;
             default:
                 //ftl_err("FTL received unkown request type, ERROR\n");

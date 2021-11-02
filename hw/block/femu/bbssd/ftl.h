@@ -14,6 +14,9 @@
 #define WRITE_OP   1
 #define FLUSH_OP   2
 #define DISCARD_OP 3
+
+// Define decay factor
+#define DECAY 0.9
 // DZ End
 
 enum {
@@ -79,18 +82,6 @@ struct ppa {
         } g;
 
         uint64_t ppa;
-        // DZ Start
-        // Define structure for death time analysis
-
-        // Previously calculated average
-        float16 death_time_avg;
-        // Previous access timestamp
-        float16 last_access_time;
-        // Previous access I/O operation
-        // Can be READ_OP, WRITE_OP, FLUSH_OP or DISCARD_OP
-        float16 last_access_op;
-
-        // DZ End
     };
 };
 
@@ -219,11 +210,31 @@ struct nand_cmd {
     int64_t stime; /* Coperd: request arrival time */
 };
 
+struct death_time_track{
+    // DZ Start
+    // Define structure for death time analysis
+
+    // Previously calculated average
+    uint64_t death_time_avg;
+    // Previous access timestamp
+    uint64_t last_access_time;
+    // Previous access I/O operation
+    // Can be READ_OP, WRITE_OP, FLUSH_OP or DISCARD_OP
+    int last_access_op;
+    bool valid;
+
+    // DZ End
+};
+
 struct ssd {
     char *ssdname;
     struct ssdparams sp;
     struct ssd_channel *ch;
     struct ppa *maptbl; /* page level mapping table */
+    // DZ Start
+    // Similar to maptbl, we have a death time analysis which has LBA as key
+    struct death_time_track *death_time_list; /* page level mapping table */
+    // DZ End
     uint64_t *rmap;     /* reverse mapptbl, assume it's stored in OOB */
     struct write_pointer wp;
     struct line_mgmt lm;
