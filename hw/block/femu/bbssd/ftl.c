@@ -1,6 +1,13 @@
 #include "ftl.h"
 
-//#define FEMU_DEBUG_FTL
+#ifdef FEMU_DEBUG_FTL
+FILE * femu_log_file;
+#define write_log(fmt, ...) \
+    do { if (femu_log_file) fprintf(femu_log_file, fmt, ## __VA_ARGS__);} while (0)
+#else
+#define write_log(fmt, ...) \
+    do { } while (0)
+#endif
 
 static void *ftl_thread(void *arg);
 
@@ -25,36 +32,137 @@ static inline void set_maptbl_ent(struct ssd *ssd, uint64_t lpn, struct ppa *ppa
     ssd->maptbl[lpn] = *ppa;
 }
 
-
-static inline uint64_t set_latest_access_time(struct ssd *ssd, uint64_t lpn, int op)
+// DZ Start
+static void set_latest_access_time(struct ssd *ssd, uint64_t start_lpn, uint64_t end_lpn, int op)
 {
-    ftl_log("Setting latest access time.");
-    uint64_t prediction;
-    if (ssd->death_time_list[lpn].valid){
+    uint64_t now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+    int      prev_op;
+    uint64_t prev_avg;
+    uint64_t prev_access_time;
+    uint64_t lpn;
+
+    for (lpn = start_lpn; lpn <= end_lpn; lpn++){
+        if (ssd->death_time_list[lpn].valid){
+            prev_op = ssd->death_time_list[lpn].last_access_op;
+            prev_avg = ssd->death_time_list[lpn].death_time_avg;
+            prev_access_time = ssd->death_time_list[lpn].last_access_time;
+            
+            // Only consider W->W and W->D as death. Update death time avg in this case
+            if (prev_op == WRITE_OP){
+                #ifdef FEMU_DEBUG_FTL
+                write_log("%"PRId64",%"PRIu64",%"PRIu64"\n", ssd->death_time_list[lpn].prev_death_time_prediction, now - prev_access_time, lpn);
+                #endif
+                if (prev_avg > 0){
+                    ssd->death_time_list[lpn].death_time_avg = prev_avg * (1 - DECAY) + (now - prev_access_time) * DECAY;
+                }else{
+                    ssd->death_time_list[lpn].death_time_avg = now - prev_access_time;
+                }
+            }else{
+                #ifdef FEMU_DEBUG_FTL
+                write_log("%d,%d,%"PRIu64"\n", -2, -2, lpn);
+                #endif
+            }
+
+            #ifdef FEMU_DEBUG_FTL
+            ssd->death_time_list[lpn].prev_death_time_prediction = prev_avg;
+            #endif
+            ssd->death_time_list[lpn].last_access_op = op;
+            ssd->death_time_list[lpn].last_access_time = now;
+        }else{
+            #ifdef FEMU_DEBUG_FTL
+            if (op == WRITE_OP){
+                write_log("%d,%d,%"PRIu64"\n", -1, -1, lpn);
+            }else{
+                write_log("%d,%d,%"PRIu64"\n", -3, -3, lpn);
+            }
+            #endif
+            if (op == WRITE_OP){
+                for (lpn = start_lpn; lpn <= end_lpn; lpn++){
+                    ssd->death_time_list[lpn].valid = true;
+                    ssd->death_time_list[lpn].death_time_avg = 0;
+                    #ifdef FEMU_DEBUG_FTL
+                    ssd->death_time_list[lpn].prev_death_time_prediction = -1;
+                    #endif
+                    ssd->death_time_list[lpn].last_access_op = op;
+                    ssd->death_time_list[lpn].last_access_time = now;
+                }
+            }
+        }
+    }
+}
+
+
+// Previous Version
+/*
+static int64_t set_latest_access_time(struct ssd *ssd, uint64_t start_lpn, uint64_t end_lpn, int op)
+{
+    int64_t  prediction; 
+    uint64_t now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+    int      prev_op = ssd->death_time_list[start_lpn].last_access_op;
+    uint64_t prev_avg = ssd->death_time_list[start_lpn].death_time_avg;
+    uint64_t prev_access_time = ssd->death_time_list[start_lpn].last_access_time;
+    uint64_t lpn;
+    if (ssd->death_time_list[start_lpn].valid){
+        #ifdef FEMU_DEBUG_FTL
+        // This is to prove the accuracy of our death time prediction model
+        if (prev_op == WRITE_OP){
+            write_log("%"PRId64",%"PRIu64",%"PRIu64",%"PRIu64"\n", ssd->death_time_list[start_lpn].prev_death_time_prediction, now - prev_access_time, start_lpn, end_lpn);
+        }else{
+            write_log("%d,%d,%"PRIu64",%"PRIu64"\n", -2, -2, start_lpn, end_lpn);
+        }
+        #endif
+
         if (op == WRITE_OP){
-            prediction = ssd->death_time_list[lpn].death_time_avg;
+            prediction = prev_avg;
         }else{
             prediction = -2;
         }
+
         // Only consider W->W and W->D as death. Update death time avg in this case
-        if (ssd->death_time_list[lpn].last_access_op == WRITE_OP){
-            if (ssd->death_time_list[lpn].death_time_avg > 0){
-                ssd->death_time_list[lpn].death_time_avg = ssd->death_time_list[lpn].death_time_avg * (1 - DECAY) + (qemu_clock_get_ns(QEMU_CLOCK_REALTIME) - ssd->death_time_list[lpn].last_access_time) * DECAY;
-            }else{
-                ssd->death_time_list[lpn].death_time_avg = qemu_clock_get_ns(QEMU_CLOCK_REALTIME) - ssd->death_time_list[lpn].last_access_time;
+        for (lpn = start_lpn; lpn <= end_lpn; lpn++){
+
+            #ifdef FEMU_DEBUG_FTL
+            ssd->death_time_list[lpn].prev_death_time_prediction = prediction;
+            #endif
+            if (prev_op == WRITE_OP){
+                if (prev_avg > 0){
+                    ssd->death_time_list[lpn].death_time_avg = prev_avg * (1 - DECAY) + (now - prev_access_time) * DECAY;
+                }else{
+                    ssd->death_time_list[lpn].death_time_avg = now - prev_access_time;
+                }
+            }else if (prev_op == DISCARD_OP && op == WRITE_OP){
+                ssd->death_time_list[lpn].death_time_avg = prev_avg;
             }
+            ssd->death_time_list[lpn].last_access_op = op;
+            ssd->death_time_list[lpn].last_access_time = now;
         }
     }else{
-        prediction = -1;
+        #ifdef FEMU_DEBUG_FTL
         if (op == WRITE_OP){
-            ssd->death_time_list[lpn].valid = true;
-            ssd->death_time_list[lpn].last_access_op = op;
-            ssd->death_time_list[lpn].last_access_time = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
-            ssd->death_time_list[lpn].death_time_avg = 0;
+            write_log("%d,%d,%"PRIu64",%"PRIu64"\n", -1, -1, start_lpn, end_lpn);
+        }else{
+            write_log("%d,%d,%"PRIu64",%"PRIu64"\n", -3, -3, start_lpn, end_lpn);
+        }
+        #endif
+        if (op == WRITE_OP){
+            prediction = -1;
+            for (lpn = start_lpn; lpn <= end_lpn; lpn++){
+                ssd->death_time_list[lpn].valid = true;
+                ssd->death_time_list[lpn].death_time_avg = 0;
+                #ifdef FEMU_DEBUG_FTL
+                ssd->death_time_list[lpn].prev_death_time_prediction = prediction;
+                #endif
+                ssd->death_time_list[lpn].last_access_op = op;
+                ssd->death_time_list[lpn].last_access_time = now;
+            }
+        }else{
+            prediction = -3;
         }
     }
     return prediction;
 }
+*/
+// DZ End
 
 static uint64_t ppa2pgidx(struct ssd *ssd, struct ppa *ppa)
 {
@@ -871,6 +979,11 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
             break;
     }
 
+    // DZ Start
+    // This is a write. Update death time and average.
+    set_latest_access_time(ssd, start_lpn, end_lpn, WRITE_OP);
+    // DZ End
+
     for (lpn = start_lpn; lpn <= end_lpn; lpn++) {
         ppa = get_maptbl_ent(ssd, lpn);
         if (mapped_ppa(&ppa)) {
@@ -878,10 +991,7 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
             mark_page_invalid(ssd, &ppa);
             set_rmap_ent(ssd, INVALID_LPN, &ppa);
         }
-        // DZ Start
-        // This is a write. Update death time and average.
-        set_latest_access_time(ssd, lpn, WRITE_OP);
-        // DZ End
+        
         /* new write */
         ppa = get_new_page(ssd);
         /* update maptbl */
@@ -906,8 +1016,46 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
     return maxlat;
 }
 
+// DZ Start
+static void ssd_dsm(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req){
+    // Mostly adapted from nvme_dsm() in nvme-io.c.
+    uint64_t lba = req->slba;
+    struct ssdparams *spp = &ssd->sp;
+    int len = req->nlb;
+    uint64_t start_lpn;
+    uint64_t end_lpn;
+
+    if (req->cmd.cdw11 & NVME_DSMGMT_AD){
+        uint16_t nr = (req->cmd.cdw10 & 0xff) + 1;
+        NvmeDsmRange range[nr];
+        
+        // FEMU will handle the real I/O request first
+        // and also finished all sanity check on DSM range.
+        // See nvme_dsm() in nvme-io.c.
+        // However, we still need to get range information using this function.
+        dma_write_prp(n, (uint8_t *)range, sizeof(range), req->cmd.dptr.prp1, req->cmd.dptr.prp2);
+        // We can skip sanity check here.
+        for (int i = 0; i < nr; i++) {
+            lba = le64_to_cpu(range[i].slba);
+            len = le32_to_cpu(range[i].nlb);
+
+            start_lpn = lba / spp->secs_per_pg;
+            end_lpn = (lba + len - 1) / spp->secs_per_pg;
+            if (end_lpn >= spp->tt_pgs) {
+                ftl_err("start_lpn=%"PRIu64",tt_pgs=%d\n", start_lpn, ssd->sp.tt_pgs);
+            }
+            set_latest_access_time(ssd, start_lpn, end_lpn, DISCARD_OP);
+        }
+    }
+}
+// DZ End
+
 static void *ftl_thread(void *arg)
 {
+    #ifdef FEMU_DEBUG_FTL
+    femu_log_file = fopen("/tmp/femu.log","a");
+    write_log("estimatedt,realdt,lba\n");
+    #endif
     FemuCtrl *n = (FemuCtrl *)arg;
     struct ssd *ssd = n->ssd;
     NvmeRequest *req = NULL;
@@ -944,8 +1092,8 @@ static void *ftl_thread(void *arg)
             case NVME_CMD_DSM:
                 lat = 0;
                 // DZ Start
-                // TODO: Put discard request here
-                
+                // Handle discard request here
+                ssd_dsm(n, ssd, req);
                 // DZ End
                 break;
             default:
@@ -967,7 +1115,7 @@ static void *ftl_thread(void *arg)
             }
         }
     }
-
+    fclose(femu_log_file);
     return NULL;
 }
 

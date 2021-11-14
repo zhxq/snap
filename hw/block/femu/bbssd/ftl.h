@@ -1,6 +1,8 @@
 #ifndef __FEMU_FTL_H
 #define __FEMU_FTL_H
 
+//#define FEMU_DEBUG_FTL
+
 #include "../nvme.h"
 
 #define INVALID_PPA     (~(0ULL))
@@ -210,21 +212,22 @@ struct nand_cmd {
     int64_t stime; /* Coperd: request arrival time */
 };
 
+// DZ Start
 struct death_time_track{
-    // DZ Start
     // Define structure for death time analysis
-
     // Previously calculated average
     uint64_t death_time_avg;
+    #ifdef FEMU_DEBUG_FTL
+    int64_t prev_death_time_prediction;
+    #endif
     // Previous access timestamp
     uint64_t last_access_time;
     // Previous access I/O operation
     // Can be READ_OP, WRITE_OP, FLUSH_OP or DISCARD_OP
     int last_access_op;
     bool valid;
-
-    // DZ End
 };
+// DZ End
 
 struct ssd {
     char *ssdname;
