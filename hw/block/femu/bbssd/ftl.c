@@ -1115,7 +1115,9 @@ static void *ftl_thread(void *arg)
             }
         }
     }
+    #ifdef FEMU_DEBUG_FTL
     fclose(femu_log_file);
+    #endif
     return NULL;
 }
 
