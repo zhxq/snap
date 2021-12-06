@@ -321,6 +321,8 @@ enum NvmeAdminCommands {
     NVME_ADM_CMD_ASYNC_EV_REQ   = 0x0c,
     NVME_ADM_CMD_ACTIVATE_FW    = 0x10,
     NVME_ADM_CMD_DOWNLOAD_FW    = 0x11,
+    NVME_ADM_CMD_DIR_SEND       = 0x19,
+    NVME_ADM_CMD_DIR_RECEIVE    = 0x1a,
     NVME_ADM_CMD_FORMAT_NVM     = 0x80,
     NVME_ADM_CMD_SECURITY_SEND  = 0x81,
     NVME_ADM_CMD_SECURITY_RECV  = 0x82,
@@ -452,6 +454,7 @@ enum {
     NVME_RW_PRINFO_PRCHK_GUARD  = 1 << 12,
     NVME_RW_PRINFO_PRCHK_APP    = 1 << 11,
     NVME_RW_PRINFO_PRCHK_REF    = 1 << 10,
+    NVME_RW_DTYPE_STREAMS		= 1 << 4,
 };
 
 typedef struct NvmeDsmCmd {
@@ -531,6 +534,7 @@ enum NvmeStatusCodes {
     NVME_INVALID_NSID           = 0x000b,
     NVME_CMD_SEQ_ERROR          = 0x000c,
     NVME_INVALID_CMD_SET        = 0x002c,
+    NVME_DIR_STREAM_ALLOC_ERROR = 0x007f,
     NVME_LBA_RANGE              = 0x0080,
     NVME_CAP_EXCEEDED           = 0x0081,
     NVME_NS_NOT_READY           = 0x0082,
@@ -754,7 +758,8 @@ enum NvmeIdCtrlOacs {
     NVME_OACS_SECURITY      = 1 << 0,
     NVME_OACS_FORMAT        = 1 << 1,
     NVME_OACS_FW            = 1 << 2,
-    NVME_OACS_Oc12DEV = 1 << 3,
+    NVME_OACS_Oc12DEV       = 1 << 3,
+    NVME_OACS_DIR           = 1 << 5,
     NVME_OACS_DBBUF         = 1 << 8,
 };
 
@@ -822,6 +827,45 @@ enum NvmeFeatureIds {
     NVME_SOFTWARE_PROGRESS_MARKER   = 0x80,
     NVME_FID_MAX                    = 0x100
 };
+
+
+enum NvmeDirectiveType {
+    NVME_DIR_TYPE_IDENTIFY          = 0x00,
+    NVME_DIR_TYPE_STREAMS           = 0x01,
+    NVME_DIR_SND_ID_OP_ENABLE       = 0x01,
+    NVME_DIR_SND_ST_OP_REL_ID       = 0x01,
+    NVME_DIR_SND_ST_OP_REL_RSC      = 0x02,
+    NVME_DIR_RCV_ID_OP_PARAM        = 0x01,
+    NVME_DIR_RCV_ST_OP_PARAM        = 0x01,
+    NVME_DIR_RCV_ST_OP_STATUS       = 0x02,
+    NVME_DIR_RCV_ST_OP_RESOURCE     = 0x03,
+    NVME_DIR_ENDIR                  = 0x01,
+    NVME_DIR_IDF_IDENTIFY = 0x1,
+    NVME_DIR_IDF_STREAMS = 0x2,
+};
+
+typedef struct NvmeDirId {
+       uint8_t dir_support[32];
+       uint8_t dir_enable[32];
+       uint8_t res[4032];
+} NvmeDirId;
+
+typedef struct NvmeDirStrParam {
+    uint16_t     msl;
+    uint16_t     nssa;
+    uint16_t     nsso;
+    uint8_t      res10[10];
+    uint32_t     sws;
+    uint16_t     sgs;
+    uint16_t     nsa;
+    uint16_t     nso;
+    uint8_t      res6[6];
+} NvmeDirStrParam;
+
+typedef struct NvmeDirStrNsStat {
+       uint16_t  cnt;
+       uint16_t  id[65535];
+} NvmeDirStrNsStat;
 
 typedef enum NvmeFeatureCap {
     NVME_FEAT_CAP_SAVE      = 1 << 0,
@@ -1059,6 +1103,9 @@ typedef struct NvmeZone NvmeZone;
 typedef struct NvmeNamespace {
     struct FemuCtrl *ctrl;
     NvmeIdNs        id_ns;
+    NvmeDirId       *id_dir;
+    NvmeDirStrParam *str_ns_param;
+    NvmeDirStrNsStat *str_ns_stat;
     NvmeRangeType   lba_range[64];
     unsigned long   *util;
     unsigned long   *uncorrectable;
@@ -1269,7 +1316,7 @@ typedef struct FemuCtrl {
     NvmeCQueue      admin_cq;
     NvmeFeatureVal  features;
     NvmeIdCtrl      id_ctrl;
-
+    NvmeDirStrParam *str_sys_param;
     QSIMPLEQ_HEAD(aer_queue, NvmeAsyncEvent) aer_queue;
     QEMUTimer       *aer_timer;
     uint8_t         aer_mask;
@@ -1383,6 +1430,12 @@ static inline bool ZNSSD(FemuCtrl *n)
 /* Basic NVMe Queue Pair operation APIs from nvme-util.c */
 int nvme_check_sqid(FemuCtrl *n, uint16_t sqid);
 int nvme_check_cqid(FemuCtrl *n, uint16_t cqid);
+uint16_t nvme_dir_send(FemuCtrl *n, NvmeCmd *cmd);
+uint16_t nvme_dir_receive(FemuCtrl *n, NvmeCmd *cmd, NvmeCqe *cqe);
+int nvme_found_in_str_list(NvmeDirStrNsStat *str_ns_stat, uint16_t dspec);
+void nvme_add_to_str_list(NvmeDirStrNsStat *str_ns_stat, uint16_t dspec);
+void nvme_del_from_str_list(NvmeDirStrNsStat *str_ns_stat, int pos);
+void nvme_update_str_stat(FemuCtrl *n, NvmeNamespace *ns, uint16_t dspec);
 void nvme_inc_cq_tail(NvmeCQueue *cq);
 void nvme_inc_sq_head(NvmeSQueue *sq);
 void nvme_update_cq_head(NvmeCQueue *cq);

@@ -345,7 +345,19 @@ static int nvme_init_namespace(FemuCtrl *n, NvmeNamespace *ns, Error **errp)
     int lba_index;
 
     nvme_ns_init_identify(n, id_ns);
-
+    NvmeIdCtrl *id = &n->id_ctrl;
+    if (id->oacs & NVME_OACS_DIR) {
+	    ns->id_dir = g_new0(NvmeDirId, 1);
+	    ns->id_dir->dir_support[0] = NVME_DIR_IDF_IDENTIFY | NVME_DIR_IDF_STREAMS;
+	    ns->id_dir->dir_enable[0] = NVME_DIR_IDF_IDENTIFY;
+	    ns->str_ns_param = g_new0(NvmeDirStrParam, 1);
+	    ns->str_ns_param->sws = cpu_to_le32(32);
+	    ns->str_ns_param->sgs = cpu_to_le16(36864);
+	    ns->str_ns_param->nsa = 0;
+	    ns->str_ns_param->nso = 0;
+	    ns->str_ns_stat = g_new0(NvmeDirStrNsStat, 1);
+	    ns->str_ns_stat->cnt = 0;
+    }
     lba_index = NVME_ID_NS_FLBAS_INDEX(ns->id_ns.flbas);
     num_blks = n->ns_size / ((1 << id_ns->lbaf[lba_index].lbads));
     id_ns->nuse = id_ns->ncap = id_ns->nsze = cpu_to_le64(num_blks);
@@ -396,6 +408,12 @@ static void nvme_init_ctrl(FemuCtrl *n)
     id->mdts         = n->mdts;
     id->ver          = 0x00010300;
     id->oacs         = cpu_to_le16(n->oacs | NVME_OACS_DBBUF);
+    if (id->oacs & NVME_OACS_DIR) {
+        n->str_sys_param = g_new0(NvmeDirStrParam, 1);
+        n->str_sys_param->msl = cpu_to_le16(8);
+        n->str_sys_param->nssa = cpu_to_le16(8);
+        n->str_sys_param->nsso = 0;
+    }
     id->acl          = n->acl;
     id->aerl         = n->aerl;
     id->frmw         = 7 << 1 | 1;
@@ -578,6 +596,16 @@ static void femu_exit(PCIDevice *pci_dev)
 
     femu_debug("femu_exit starting!\n");
 
+    NvmeNamespace *ns = n->namespaces;
+    int i;
+
+    for (i = 0; i < n->num_namespaces; i++) {
+        g_free(ns->id_dir);
+        g_free(ns->str_ns_param);
+        g_free(ns->str_ns_stat);
+        ns++;
+    }
+
     if (n->ext_ops.exit) {
         n->ext_ops.exit(n);
     }
@@ -587,6 +615,7 @@ static void femu_exit(PCIDevice *pci_dev)
     free_dram_backend(n->mbe);
 
     g_free(n->namespaces);
+    g_free(n->str_sys_param);
     g_free(n->features.int_vector_config);
     g_free(n->aer_reqs);
     g_free(n->elpes);

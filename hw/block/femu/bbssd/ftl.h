@@ -1,7 +1,7 @@
 #ifndef __FEMU_FTL_H
 #define __FEMU_FTL_H
 
-//#define FEMU_DEBUG_FTL
+#define FEMU_DEBUG_FTL
 
 #include "../nvme.h"
 

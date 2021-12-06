@@ -50,7 +50,7 @@ static void set_latest_access_time(struct ssd *ssd, uint64_t start_lpn, uint64_t
             // Only consider W->W and W->D as death. Update death time avg in this case
             if (prev_op == WRITE_OP){
                 #ifdef FEMU_DEBUG_FTL
-                write_log("%"PRId64",%"PRIu64",%"PRIu64"\n", ssd->death_time_list[lpn].prev_death_time_prediction, now - prev_access_time, lpn);
+                //write_log("%"PRId64",%"PRIu64",%"PRIu64"\n", ssd->death_time_list[lpn].prev_death_time_prediction, now - prev_access_time, lpn);
                 #endif
                 if (prev_avg > 0){
                     ssd->death_time_list[lpn].death_time_avg = prev_avg * (1 - DECAY) + (now - prev_access_time) * DECAY;
@@ -59,7 +59,7 @@ static void set_latest_access_time(struct ssd *ssd, uint64_t start_lpn, uint64_t
                 }
             }else{
                 #ifdef FEMU_DEBUG_FTL
-                write_log("%d,%d,%"PRIu64"\n", -2, -2, lpn);
+                //write_log("%d,%d,%"PRIu64"\n", -2, -2, lpn);
                 #endif
             }
 
@@ -71,9 +71,9 @@ static void set_latest_access_time(struct ssd *ssd, uint64_t start_lpn, uint64_t
         }else{
             #ifdef FEMU_DEBUG_FTL
             if (op == WRITE_OP){
-                write_log("%d,%d,%"PRIu64"\n", -1, -1, lpn);
+                //write_log("%d,%d,%"PRIu64"\n", -1, -1, lpn);
             }else{
-                write_log("%d,%d,%"PRIu64"\n", -3, -3, lpn);
+                //write_log("%d,%d,%"PRIu64"\n", -3, -3, lpn);
             }
             #endif
             if (op == WRITE_OP){
@@ -956,8 +956,30 @@ static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
     return maxlat;
 }
 
-static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
+static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
 {
+    NvmeRwCmd *rw = (NvmeRwCmd *) &req->cmd;
+    NvmeNamespace *ns = req->ns;
+    uint16_t control = le16_to_cpu(rw->control);
+    uint32_t dsmgmt = le32_to_cpu(rw->dsmgmt);
+    uint8_t  dtype = (control >> 4) & 0xF;
+    uint16_t dspec = (dsmgmt >> 16) & 0xFFFF;
+
+    if (dtype == NVME_RW_DTYPE_STREAMS){
+        #ifdef FEMU_DEBUG_FTL
+        write_log("NVME_RW_DTYPE_STREAMS Got this for stream: %d\n", dspec);
+        #endif
+    }else{
+        #ifdef FEMU_DEBUG_FTL
+        write_log("Didn't Get this for stream: %d\n", dspec);
+        #endif
+    }
+
+    if (req->is_write) {
+	    // DPRINTF("%s, opcode:%#x, offset:%#lx, size:%#lx, dtype:%#x, dspec:%#x\n", __func__, rw->opcode, data_offset, data_size, dtype, dspec);
+	    if (dtype) nvme_update_str_stat(n, ns, dspec);
+    }
+
     uint64_t lba = req->slba;
     struct ssdparams *spp = &ssd->sp;
     int len = req->nlb;
@@ -1084,7 +1106,7 @@ static void *ftl_thread(void *arg)
             ftl_assert(req);
             switch (req->cmd.opcode) {
             case NVME_CMD_WRITE:
-                lat = ssd_write(ssd, req);
+                lat = ssd_write(n, ssd, req);
                 break;
             case NVME_CMD_READ:
                 lat = ssd_read(ssd, req);
