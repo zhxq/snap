@@ -407,7 +407,7 @@ static void nvme_init_ctrl(FemuCtrl *n)
     id->cmic         = 0;
     id->mdts         = n->mdts;
     id->ver          = 0x00010300;
-    id->oacs         = cpu_to_le16(n->oacs | NVME_OACS_DBBUF);
+    id->oacs         = cpu_to_le16(n->oacs | NVME_OACS_DBBUF | NVME_OACS_DIR);
     if (id->oacs & NVME_OACS_DIR) {
         n->str_sys_param = g_new0(NvmeDirStrParam, 1);
         n->str_sys_param->msl = cpu_to_le16(8);

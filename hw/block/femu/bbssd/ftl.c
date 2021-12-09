@@ -962,22 +962,19 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
     NvmeNamespace *ns = req->ns;
     uint16_t control = le16_to_cpu(rw->control);
     uint32_t dsmgmt = le32_to_cpu(rw->dsmgmt);
+    bool stream = control & NVME_RW_DTYPE_STREAMS;
     uint8_t  dtype = (control >> 4) & 0xF;
     uint16_t dspec = (dsmgmt >> 16) & 0xFFFF;
 
-    if (dtype == NVME_RW_DTYPE_STREAMS){
-        #ifdef FEMU_DEBUG_FTL
-        write_log("NVME_RW_DTYPE_STREAMS Got this for stream: %d\n", dspec);
-        #endif
-    }else{
-        #ifdef FEMU_DEBUG_FTL
-        write_log("Didn't Get this for stream: %d\n", dspec);
-        #endif
-    }
 
-    if (req->is_write) {
-	    // DPRINTF("%s, opcode:%#x, offset:%#lx, size:%#lx, dtype:%#x, dspec:%#x\n", __func__, rw->opcode, data_offset, data_size, dtype, dspec);
-	    if (dtype) nvme_update_str_stat(n, ns, dspec);
+    // Remember, if stream is true, then dspec = 0 means stream ID 1,
+    // and so on. See nvme_assign_write_stream() line 702 for v5.11.10.
+    // streamid-- before adding stream ID to the request packet.
+
+    if (stream){
+        write_log("NVME_RW_DTYPE_STREAMS Got this for stream: %d\n", dspec);
+    }else{
+        write_log("Didn't Get this for stream: %d\n", dspec);
     }
 
     uint64_t lba = req->slba;
@@ -989,6 +986,9 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
     uint64_t lpn;
     uint64_t curlat = 0, maxlat = 0;
     int r;
+
+    write_log("%s, opcode:%#x, start_lpn:%#lx, size:%#lx, dtype:%#x, dspec:%#x\n", __func__, rw->opcode, start_lpn, end_lpn - start_lpn, dtype, dspec);
+	if (stream) nvme_update_str_stat(n, ns, dspec);
 
     if (end_lpn >= spp->tt_pgs) {
         ftl_err("start_lpn=%"PRIu64",tt_pgs=%d\n", start_lpn, ssd->sp.tt_pgs);
