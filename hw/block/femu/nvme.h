@@ -840,8 +840,8 @@ enum NvmeDirectiveType {
     NVME_DIR_RCV_ST_OP_STATUS       = 0x02,
     NVME_DIR_RCV_ST_OP_RESOURCE     = 0x03,
     NVME_DIR_ENDIR                  = 0x01,
-    NVME_DIR_IDF_IDENTIFY = 0x1,
-    NVME_DIR_IDF_STREAMS = 0x2,
+    NVME_DIR_IDF_IDENTIFY           = 0x1,
+    NVME_DIR_IDF_STREAMS            = 0x2,
 };
 
 typedef struct NvmeDirId {
