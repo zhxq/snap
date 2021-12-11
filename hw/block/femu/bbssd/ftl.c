@@ -50,7 +50,7 @@ static void set_latest_access_time(struct ssd *ssd, uint64_t start_lpn, uint64_t
             // Only consider W->W and W->D as death. Update death time avg in this case
             if (prev_op == WRITE_OP){
                 #ifdef FEMU_DEBUG_FTL
-                //write_log("%"PRId64",%"PRIu64",%"PRIu64"\n", ssd->death_time_list[lpn].prev_death_time_prediction, now - prev_access_time, lpn);
+                write_log("%"PRId64",%"PRIu64",%"PRIu64"\n", ssd->death_time_list[lpn].prev_death_time_prediction, now - prev_access_time, lpn);
                 #endif
                 if (prev_avg > 0){
                     ssd->death_time_list[lpn].death_time_avg = prev_avg * (1 - DECAY) + (now - prev_access_time) * DECAY;
@@ -59,7 +59,7 @@ static void set_latest_access_time(struct ssd *ssd, uint64_t start_lpn, uint64_t
                 }
             }else{
                 #ifdef FEMU_DEBUG_FTL
-                //write_log("%d,%d,%"PRIu64"\n", -2, -2, lpn);
+                write_log("%d,%d,%"PRIu64"\n", -2, -2, lpn);
                 #endif
             }
 
@@ -71,9 +71,9 @@ static void set_latest_access_time(struct ssd *ssd, uint64_t start_lpn, uint64_t
         }else{
             #ifdef FEMU_DEBUG_FTL
             if (op == WRITE_OP){
-                //write_log("%d,%d,%"PRIu64"\n", -1, -1, lpn);
+                write_log("%d,%d,%"PRIu64"\n", -1, -1, lpn);
             }else{
-                //write_log("%d,%d,%"PRIu64"\n", -3, -3, lpn);
+                write_log("%d,%d,%"PRIu64"\n", -3, -3, lpn);
             }
             #endif
             if (op == WRITE_OP){
