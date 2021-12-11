@@ -1371,6 +1371,8 @@ typedef struct FemuCtrl {
 
     /* Nand Flash Type: SLC/MLC/TLC/QLC/PLC */
     uint8_t         flash_type;
+    bool            enable_stream;
+    uint8_t         msl; // max number of streams for multi-stream SSD
 } FemuCtrl;
 
 typedef struct NvmePollerThreadArgument {

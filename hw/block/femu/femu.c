@@ -407,12 +407,17 @@ static void nvme_init_ctrl(FemuCtrl *n)
     id->cmic         = 0;
     id->mdts         = n->mdts;
     id->ver          = 0x00010300;
-    id->oacs         = cpu_to_le16(n->oacs | NVME_OACS_DBBUF | NVME_OACS_DIR);
+    if (n->enable_stream){
+        n->oacs |= NVME_OACS_DIR;
+    }
+    id->oacs         = cpu_to_le16(n->oacs | NVME_OACS_DBBUF);
     if (id->oacs & NVME_OACS_DIR) {
         n->str_sys_param = g_new0(NvmeDirStrParam, 1);
-        n->str_sys_param->msl = cpu_to_le16(8);
-        n->str_sys_param->nssa = cpu_to_le16(8);
+        n->str_sys_param->msl = cpu_to_le16(n->msl);
+        n->str_sys_param->nssa = cpu_to_le16(n->msl);
         n->str_sys_param->nsso = 0;
+    }else{
+        n->msl = 0;
     }
     id->acl          = n->acl;
     id->aerl         = n->aerl;
@@ -676,6 +681,8 @@ static Property femu_props[] = {
     DEFINE_PROP_UINT8("lnum_lun", FemuCtrl, oc_params.num_lun, 8),
     DEFINE_PROP_UINT8("lnum_pln", FemuCtrl, oc_params.num_pln, 2),
     DEFINE_PROP_UINT16("lmetasize", FemuCtrl, oc_params.sos, 16),
+    DEFINE_PROP_BOOL("enable_stream", FemuCtrl, enable_stream, true),
+    DEFINE_PROP_UINT8("max_streams", FemuCtrl, msl, 8),
     DEFINE_PROP_END_OF_LIST(),
 };
 
