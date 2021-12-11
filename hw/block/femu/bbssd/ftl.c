@@ -90,78 +90,6 @@ static void set_latest_access_time(struct ssd *ssd, uint64_t start_lpn, uint64_t
         }
     }
 }
-
-
-// Previous Version
-/*
-static int64_t set_latest_access_time(struct ssd *ssd, uint64_t start_lpn, uint64_t end_lpn, int op)
-{
-    int64_t  prediction; 
-    uint64_t now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
-    int      prev_op = ssd->death_time_list[start_lpn].last_access_op;
-    uint64_t prev_avg = ssd->death_time_list[start_lpn].death_time_avg;
-    uint64_t prev_access_time = ssd->death_time_list[start_lpn].last_access_time;
-    uint64_t lpn;
-    if (ssd->death_time_list[start_lpn].valid){
-        #ifdef FEMU_DEBUG_FTL
-        // This is to prove the accuracy of our death time prediction model
-        if (prev_op == WRITE_OP){
-            write_log("%"PRId64",%"PRIu64",%"PRIu64",%"PRIu64"\n", ssd->death_time_list[start_lpn].prev_death_time_prediction, now - prev_access_time, start_lpn, end_lpn);
-        }else{
-            write_log("%d,%d,%"PRIu64",%"PRIu64"\n", -2, -2, start_lpn, end_lpn);
-        }
-        #endif
-
-        if (op == WRITE_OP){
-            prediction = prev_avg;
-        }else{
-            prediction = -2;
-        }
-
-        // Only consider W->W and W->D as death. Update death time avg in this case
-        for (lpn = start_lpn; lpn <= end_lpn; lpn++){
-
-            #ifdef FEMU_DEBUG_FTL
-            ssd->death_time_list[lpn].prev_death_time_prediction = prediction;
-            #endif
-            if (prev_op == WRITE_OP){
-                if (prev_avg > 0){
-                    ssd->death_time_list[lpn].death_time_avg = prev_avg * (1 - DECAY) + (now - prev_access_time) * DECAY;
-                }else{
-                    ssd->death_time_list[lpn].death_time_avg = now - prev_access_time;
-                }
-            }else if (prev_op == DISCARD_OP && op == WRITE_OP){
-                ssd->death_time_list[lpn].death_time_avg = prev_avg;
-            }
-            ssd->death_time_list[lpn].last_access_op = op;
-            ssd->death_time_list[lpn].last_access_time = now;
-        }
-    }else{
-        #ifdef FEMU_DEBUG_FTL
-        if (op == WRITE_OP){
-            write_log("%d,%d,%"PRIu64",%"PRIu64"\n", -1, -1, start_lpn, end_lpn);
-        }else{
-            write_log("%d,%d,%"PRIu64",%"PRIu64"\n", -3, -3, start_lpn, end_lpn);
-        }
-        #endif
-        if (op == WRITE_OP){
-            prediction = -1;
-            for (lpn = start_lpn; lpn <= end_lpn; lpn++){
-                ssd->death_time_list[lpn].valid = true;
-                ssd->death_time_list[lpn].death_time_avg = 0;
-                #ifdef FEMU_DEBUG_FTL
-                ssd->death_time_list[lpn].prev_death_time_prediction = prediction;
-                #endif
-                ssd->death_time_list[lpn].last_access_op = op;
-                ssd->death_time_list[lpn].last_access_time = now;
-            }
-        }else{
-            prediction = -3;
-        }
-    }
-    return prediction;
-}
-*/
 // DZ End
 
 static uint64_t ppa2pgidx(struct ssd *ssd, struct ppa *ppa)
@@ -1019,7 +947,9 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
 
     // DZ Start
     // This is a write. Update death time and average.
-    set_latest_access_time(ssd, start_lpn, end_lpn, WRITE_OP);
+    if (n->death_time_prediction){
+        set_latest_access_time(ssd, start_lpn, end_lpn, WRITE_OP);
+    }
     // DZ End
 
     for (lpn = start_lpn; lpn <= end_lpn; lpn++) {
@@ -1082,7 +1012,9 @@ static void ssd_dsm(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req){
             if (end_lpn >= spp->tt_pgs) {
                 ftl_err("start_lpn=%"PRIu64",tt_pgs=%d\n", start_lpn, ssd->sp.tt_pgs);
             }
-            set_latest_access_time(ssd, start_lpn, end_lpn, DISCARD_OP);
+            if (n->death_time_prediction){
+                set_latest_access_time(ssd, start_lpn, end_lpn, DISCARD_OP);
+            }
         }
     }
 }
