@@ -454,7 +454,7 @@ enum {
     NVME_RW_PRINFO_PRCHK_GUARD  = 1 << 12,
     NVME_RW_PRINFO_PRCHK_APP    = 1 << 11,
     NVME_RW_PRINFO_PRCHK_REF    = 1 << 10,
-    NVME_RW_DTYPE_STREAMS		= 1 << 4,
+    NVME_RW_DTYPE_STREAMS       = 1 << 4,
 };
 
 typedef struct NvmeDsmCmd {
