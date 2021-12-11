@@ -1,6 +1,6 @@
 #include "./nvme.h"
 
-// Functions for multi-stream support is here:
+// Methods for multi-stream support is adapted from here:
 // https://github.com/multi-stream/qemu/commit/9888fffbf3695f7de4170e97f49231ea18fa8cd4#
 
 int nvme_check_sqid(FemuCtrl *n, uint16_t sqid)
@@ -327,27 +327,24 @@ uint16_t nvme_dir_receive(FemuCtrl *n, NvmeCmd *cmd, NvmeCqe *cqe)
         return NVME_INVALID_NSID | NVME_DNR;
     }
     if (nsid == 0xffffffff)
-	ns = &n->namespaces[0];
+        ns = &n->namespaces[0];
     else
-	ns = &n->namespaces[nsid - 1];
-
-    //DPRINTF("%s, opcode:%#x, nsid:%#x, numd:%#x, dspec:%#x, dtype:%#x, doper:%#x dw12:%#x\n", __func__, cmd->opcode, nsid, numd, dspec, dtype, doper, dw12);
-//    DPRINTF("%s, prp1:%#lx, prp2:%#lx\n", __func__, prp1, prp2);
+        ns = &n->namespaces[nsid - 1];
 
     if (!(n->id_ctrl.oacs & NVME_OACS_DIR))
         return NVME_INVALID_OPCODE;
 
     switch (dtype) {
     case NVME_DIR_TYPE_IDENTIFY:
-       switch (doper) {
+        switch (doper) {
         case NVME_DIR_RCV_ID_OP_PARAM:
-           if (((numd + 1) * 4) < sizeof(*(ns->id_dir)))
-              return dma_read_prp(n,
+            if (((numd + 1) * 4) < sizeof(*(ns->id_dir)))
+                return dma_read_prp(n,
                        (uint8_t *)ns->id_dir,
                        (numd + 1) * 4,
                        prp1, prp2);
-           else
-              return dma_read_prp(n,
+            else
+                return dma_read_prp(n,
                        (uint8_t *)ns->id_dir,
                        sizeof(*(ns->id_dir)),
                        prp1, prp2);
@@ -359,41 +356,41 @@ uint16_t nvme_dir_receive(FemuCtrl *n, NvmeCmd *cmd, NvmeCqe *cqe)
     case NVME_DIR_TYPE_STREAMS:
         switch (doper) {
         case NVME_DIR_RCV_ST_OP_PARAM:
-	   ns->str_ns_param->msl = n->str_sys_param->msl;
-	   ns->str_ns_param->nssa = n->str_sys_param->nssa;
-	   ns->str_ns_param->nsso = n->str_sys_param->nsso;
-           if (((numd + 1) * 4) < sizeof(*(ns->str_ns_param)))
-              return dma_read_prp(n,
+            ns->str_ns_param->msl = n->str_sys_param->msl;
+            ns->str_ns_param->nssa = n->str_sys_param->nssa;
+            ns->str_ns_param->nsso = n->str_sys_param->nsso;
+            if (((numd + 1) * 4) < sizeof(*(ns->str_ns_param)))
+                return dma_read_prp(n,
                        (uint8_t *)ns->str_ns_param,
                        (numd + 1) * 4,
                        prp1, prp2);
-           else
-              return dma_read_prp(n,
+            else
+                return dma_read_prp(n,
                        (uint8_t *)ns->str_ns_param,
                        sizeof(*(ns->str_ns_param)),
                        prp1, prp2);
             break;
         case NVME_DIR_RCV_ST_OP_STATUS:
-           if (((numd + 1) * 4) < sizeof(*(ns->str_ns_stat)))
-              return dma_read_prp(n,
+            if (((numd + 1) * 4) < sizeof(*(ns->str_ns_stat)))
+                return dma_read_prp(n,
                        (uint8_t *)ns->str_ns_stat,
                        (numd + 1) * 4,
                        prp1, prp2);
-           else
-              return dma_read_prp(n,
+            else
+                return dma_read_prp(n,
                        (uint8_t *)ns->str_ns_stat,
                        sizeof(*(ns->str_ns_stat)),
                        prp1, prp2);
             break;
         case NVME_DIR_RCV_ST_OP_RESOURCE:
-	   if (ns->str_ns_param->nsa)
-               return NVME_INVALID_FIELD;
-	   nsr = dw12 & 0xFFFF;
-	   if (nsr > n->str_sys_param->nssa)
-		nsr = n->str_sys_param->nssa;
-	   ns->str_ns_param->nsa = nsr;
-	   n->str_sys_param->nssa -= nsr;
-	   result = cpu_to_le32(nsr);
+            if (ns->str_ns_param->nsa)
+                return NVME_INVALID_FIELD;
+            nsr = dw12 & 0xFFFF;
+            if (nsr > n->str_sys_param->nssa)
+                nsr = n->str_sys_param->nssa;
+            ns->str_ns_param->nsa = nsr;
+            n->str_sys_param->nssa -= nsr;
+            result = cpu_to_le32(nsr);
             break;
         default:
             return NVME_INVALID_FIELD;
@@ -409,15 +406,15 @@ uint16_t nvme_dir_receive(FemuCtrl *n, NvmeCmd *cmd, NvmeCqe *cqe)
 
 int nvme_found_in_str_list(NvmeDirStrNsStat *str_ns_stat, uint16_t dspec)
 {
-   int i;
+    int i;
 
-   if (str_ns_stat->cnt == 0)
-	return -1;
+    if (str_ns_stat->cnt == 0)
+        return -1;
 
-   for (i=0; i<str_ns_stat->cnt; i++)
-	if (str_ns_stat->id[i] == dspec)
-	   return i;
-   return -1;
+    for (i=0; i<str_ns_stat->cnt; i++)
+        if (str_ns_stat->id[i] == dspec)
+            return i;
+    return -1;
 
 }
 
@@ -432,29 +429,29 @@ void nvme_del_from_str_list(NvmeDirStrNsStat *str_ns_stat, int pos)
    int i;
 
    if (str_ns_stat->cnt == 0)
-	return;
+        return;
    str_ns_stat->cnt--;
    for (i=pos; i<str_ns_stat->cnt; i++)
-	str_ns_stat->id[i] = str_ns_stat->id[i+1];
+        str_ns_stat->id[i] = str_ns_stat->id[i+1];
    str_ns_stat->id[str_ns_stat->cnt] = 0;
 }
 
 void nvme_update_str_stat(FemuCtrl *n, NvmeNamespace *ns, uint16_t dspec)
 {
-   NvmeDirStrNsStat *st = ns->str_ns_stat;
-   if (dspec == 0) /* skip if normal write */
-	return;
-   if (nvme_found_in_str_list(st, dspec) < 0) { /* not found */
-	/* delete the first if max out */
-	if (n->str_sys_param->nsso == n->str_sys_param->msl) {
-	   ns->str_ns_param->nso--;
-	   n->str_sys_param->nsso--;
-	   nvme_del_from_str_list(st, 0);
-	}
-	nvme_add_to_str_list(st, dspec);
-	ns->str_ns_param->nso++;
-	n->str_sys_param->nsso++;
-   }
+    NvmeDirStrNsStat *st = ns->str_ns_stat;
+    if (dspec == 0) /* skip if normal write */
+        return;
+    if (nvme_found_in_str_list(st, dspec) < 0) { /* not found */
+        /* delete the first if max out */
+        if (n->str_sys_param->nsso == n->str_sys_param->msl) {
+        ns->str_ns_param->nso--;
+        n->str_sys_param->nsso--;
+        nvme_del_from_str_list(st, 0);
+        }
+        nvme_add_to_str_list(st, dspec);
+        ns->str_ns_param->nso++;
+        n->str_sys_param->nsso++;
+    }
    return;
 }
 
@@ -462,9 +459,9 @@ uint16_t nvme_dir_send(FemuCtrl *n, NvmeCmd *cmd)
 {
     int i;
     uint32_t nsid = le32_to_cpu(cmd->nsid);
-//    uint64_t prp1 = le64_to_cpu(cmd->prp1);
-//    uint64_t prp2 = le64_to_cpu(cmd->prp2);
-    //uint32_t numd  = le32_to_cpu(cmd->cdw10);
+    //uint64_t prp1 = le64_to_cpu(cmd->prp1);
+    //uint64_t prp2 = le64_to_cpu(cmd->prp2);
+    //uint32_t numd = le32_to_cpu(cmd->cdw10);
     uint32_t dw11  = le32_to_cpu(cmd->cdw11);
     uint32_t dw12  = le32_to_cpu(cmd->cdw12);
     uint16_t dspec = (dw11 >> 16) & 0xFFFF;
@@ -478,12 +475,9 @@ uint16_t nvme_dir_send(FemuCtrl *n, NvmeCmd *cmd)
         return NVME_INVALID_NSID | NVME_DNR;
     }
     if (nsid == 0xffffffff)
-	ns = &n->namespaces[0];
+        ns = &n->namespaces[0];
     else
-	ns = &n->namespaces[nsid - 1];
-
-    //DPRINTF("%s, opcode:%#x, nsid:%#x, numd:%#x, dspec:%#x, dtype:%#x, doper:%#x, dw12:%#x\n", __func__, cmd->opcode, nsid, numd, dspec, dtype, doper, dw12);
-//    DPRINTF("%s, prp1:%#lx, prp2:%#lx\n", __func__, prp1, prp2);
+        ns = &n->namespaces[nsid - 1];
 
     if (!(n->id_ctrl.oacs & NVME_OACS_DIR))
         return NVME_INVALID_OPCODE;
@@ -494,7 +488,6 @@ uint16_t nvme_dir_send(FemuCtrl *n, NvmeCmd *cmd)
         case NVME_DIR_SND_ID_OP_ENABLE:
             tdtype = (dw12 >> 8) & 0xFF;
             endir = dw12 & NVME_DIR_ENDIR;
-            // DPRINTF("%s, tdtype:%#x, endir:%#x\n", __func__, tdtype, endir);
             if (tdtype == NVME_DIR_TYPE_STREAMS) {
                 if (endir)
                     ns->id_dir->dir_enable[0] |= NVME_DIR_IDF_STREAMS;
@@ -509,16 +502,15 @@ uint16_t nvme_dir_send(FemuCtrl *n, NvmeCmd *cmd)
     case NVME_DIR_TYPE_STREAMS:
         switch (doper) {
         case NVME_DIR_SND_ST_OP_REL_ID:
-	   if ((i = nvme_found_in_str_list(ns->str_ns_stat, dspec)) >= 0) {
-		// DPRINTF("%s, found:%#x in pos %#x\n", __func__, dspec, i);
-		ns->str_ns_param->nso--;
-		n->str_sys_param->nsso--;
-		nvme_del_from_str_list(ns->str_ns_stat, i);
-	   }
+            if ((i = nvme_found_in_str_list(ns->str_ns_stat, dspec)) >= 0) {
+                ns->str_ns_param->nso--;
+                n->str_sys_param->nsso--;
+                nvme_del_from_str_list(ns->str_ns_stat, i);
+            }
             break;
         case NVME_DIR_SND_ST_OP_REL_RSC:
-	   ns->str_ns_param->nsa = 0;
-	   n->str_sys_param->nssa = n->str_sys_param->msl;
+            ns->str_ns_param->nsa = 0;
+            n->str_sys_param->nssa = n->str_sys_param->msl;
             break;
         default:
             return NVME_INVALID_FIELD;

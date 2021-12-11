@@ -977,7 +977,6 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
     uint16_t control = le16_to_cpu(rw->control);
     uint32_t dsmgmt = le32_to_cpu(rw->dsmgmt);
     bool stream = control & NVME_RW_DTYPE_STREAMS;
-    uint8_t  dtype = (control >> 4) & 0xF;
     uint16_t dspec = (dsmgmt >> 16) & 0xFFFF; //Stream ID
 
 
@@ -989,6 +988,7 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
         
         // Again, dspec will decrease by 1 before being passed to the device.
         dspec += 1;
+        nvme_update_str_stat(n, ns, dspec);
         write_log("NVME_RW_DTYPE_STREAMS Got this for stream: %d\n", dspec);
     }else{
         write_log("Stream not set: %d\n", dspec);
@@ -1004,8 +1004,7 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
     uint64_t curlat = 0, maxlat = 0;
     int r;
 
-    write_log("%s, opcode:%#x, start_sec:%#lx, size:%#lx, dtype:%#x, dspec:%#x\n", __func__, rw->opcode, start_lpn * ssd->sp.secs_per_pg, (end_lpn - start_lpn + 1) * ssd->sp.secsz * ssd->sp.secs_per_pg, dtype, dspec);
-	if (stream) nvme_update_str_stat(n, ns, dspec);
+    write_log("%s, opcode:%#x, start_sec:%#lx, size:%#lx, streamenabled:%d, dspec:%#x\n", __func__, rw->opcode, start_lpn * ssd->sp.secs_per_pg, (end_lpn - start_lpn + 1) * ssd->sp.secsz * ssd->sp.secs_per_pg, stream, dspec);
 
     if (end_lpn >= spp->tt_pgs) {
         ftl_err("start_lpn=%"PRIu64",tt_pgs=%d\n", start_lpn, ssd->sp.tt_pgs);
@@ -1093,7 +1092,6 @@ static void *ftl_thread(void *arg)
 {
     #ifdef FEMU_DEBUG_FTL
     femu_log_file = fopen("/tmp/femu.log","a");
-    write_log("estimatedt,realdt,lba\n");
     #endif
     FemuCtrl *n = (FemuCtrl *)arg;
     struct ssd *ssd = n->ssd;
