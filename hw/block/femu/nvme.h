@@ -1373,6 +1373,7 @@ typedef struct FemuCtrl {
     uint8_t         flash_type;
     bool            enable_stream;
     uint8_t         msl; // max number of streams for multi-stream SSD
+    bool            death_time_prediction;
 } FemuCtrl;
 
 typedef struct NvmePollerThreadArgument {

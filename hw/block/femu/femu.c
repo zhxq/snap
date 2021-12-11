@@ -681,8 +681,9 @@ static Property femu_props[] = {
     DEFINE_PROP_UINT8("lnum_lun", FemuCtrl, oc_params.num_lun, 8),
     DEFINE_PROP_UINT8("lnum_pln", FemuCtrl, oc_params.num_pln, 2),
     DEFINE_PROP_UINT16("lmetasize", FemuCtrl, oc_params.sos, 16),
-    DEFINE_PROP_BOOL("enable_stream", FemuCtrl, enable_stream, true),
+    DEFINE_PROP_BOOL("stream_support", FemuCtrl, enable_stream, true),
     DEFINE_PROP_UINT8("max_streams", FemuCtrl, msl, 8),
+    DEFINE_PROP_BOOL("death_time_prediction", FemuCtrl, death_time_prediction, true),
     DEFINE_PROP_END_OF_LIST(),
 };
 
