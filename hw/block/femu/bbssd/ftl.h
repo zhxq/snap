@@ -204,6 +204,7 @@ struct line_mgmt {
     int free_line_cnt;
     int victim_line_cnt;
     int full_line_cnt;
+    uint8_t *block_to_stream;
 };
 
 struct nand_cmd {
@@ -239,7 +240,7 @@ struct ssd {
     struct death_time_track *death_time_list; /* page level mapping table */
     // DZ End
     uint64_t *rmap;     /* reverse mapptbl, assume it's stored in OOB */
-    struct write_pointer wp;
+    struct write_pointer *wp; // We need multiple pointers for multi-stream SSD.
     struct line_mgmt lm;
 
     /* lockless ring for communication with NVMe IO thread */

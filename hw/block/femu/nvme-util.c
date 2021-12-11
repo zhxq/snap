@@ -1,5 +1,8 @@
 #include "./nvme.h"
 
+// Methods for multi-stream support is adapted from here:
+// https://github.com/multi-stream/qemu/commit/9888fffbf3695f7de4170e97f49231ea18fa8cd4#
+
 int nvme_check_sqid(FemuCtrl *n, uint16_t sqid)
 {
     return sqid <= n->num_io_queues && n->sq[sqid] != NULL ? 0 : -1;
@@ -298,9 +301,224 @@ void nvme_set_ctrl_name(FemuCtrl *n, const char *mn, const char *sn, int *dev_id
     g_strlcpy(n->devname, serial, sizeof(serial));
 
     strpadcpy((char *)id->sn, sizeof(id->sn), serial, ' ');
-    strpadcpy((char *)id->fr, sizeof(id->fr), "1.0", ' ');
+    strpadcpy((char *)id->fr, sizeof(id->fr), "1.3", ' ');
 
     subnqn = g_strdup_printf("nqn.2021-05.org.femu:%s", serial);
     strpadcpy((char *)id->subnqn, sizeof(id->subnqn), subnqn, '\0');
 }
 
+uint16_t nvme_dir_receive(FemuCtrl *n, NvmeCmd *cmd, NvmeCqe *cqe)
+{
+    NvmeRwCmd *rw = (NvmeRwCmd *)cmd;
+    uint32_t nsid = le32_to_cpu(cmd->nsid);
+    uint64_t prp1 = le64_to_cpu(rw->prp1);
+    uint64_t prp2 = le64_to_cpu(rw->prp2);
+    uint32_t numd  = le32_to_cpu(cmd->cdw10);
+    uint32_t dw11  = le32_to_cpu(cmd->cdw11);
+    uint32_t dw12  = le32_to_cpu(cmd->cdw12);
+    //uint16_t dspec = (dw11 >> 16) & 0xFFFF;
+    uint8_t  dtype  = (dw11 >> 8) & 0xFF;
+    uint8_t  doper  = dw11 & 0xFF;
+    uint16_t nsr;
+    uint32_t result = 0;
+    NvmeNamespace *ns;
+
+    if (nsid != 0xffffffff && (nsid == 0 || nsid > n->num_namespaces)) {
+        return NVME_INVALID_NSID | NVME_DNR;
+    }
+    if (nsid == 0xffffffff)
+        ns = &n->namespaces[0];
+    else
+        ns = &n->namespaces[nsid - 1];
+
+    if (!(n->id_ctrl.oacs & NVME_OACS_DIR))
+        return NVME_INVALID_OPCODE;
+
+    switch (dtype) {
+    case NVME_DIR_TYPE_IDENTIFY:
+        switch (doper) {
+        case NVME_DIR_RCV_ID_OP_PARAM:
+            if (((numd + 1) * 4) < sizeof(*(ns->id_dir)))
+                return dma_read_prp(n,
+                       (uint8_t *)ns->id_dir,
+                       (numd + 1) * 4,
+                       prp1, prp2);
+            else
+                return dma_read_prp(n,
+                       (uint8_t *)ns->id_dir,
+                       sizeof(*(ns->id_dir)),
+                       prp1, prp2);
+            break;
+        default:
+            return NVME_INVALID_FIELD;
+        }
+        break;
+    case NVME_DIR_TYPE_STREAMS:
+        switch (doper) {
+        case NVME_DIR_RCV_ST_OP_PARAM:
+            ns->str_ns_param->msl = n->str_sys_param->msl;
+            ns->str_ns_param->nssa = n->str_sys_param->nssa;
+            ns->str_ns_param->nsso = n->str_sys_param->nsso;
+            if (((numd + 1) * 4) < sizeof(*(ns->str_ns_param)))
+                return dma_read_prp(n,
+                       (uint8_t *)ns->str_ns_param,
+                       (numd + 1) * 4,
+                       prp1, prp2);
+            else
+                return dma_read_prp(n,
+                       (uint8_t *)ns->str_ns_param,
+                       sizeof(*(ns->str_ns_param)),
+                       prp1, prp2);
+            break;
+        case NVME_DIR_RCV_ST_OP_STATUS:
+            if (((numd + 1) * 4) < sizeof(*(ns->str_ns_stat)))
+                return dma_read_prp(n,
+                       (uint8_t *)ns->str_ns_stat,
+                       (numd + 1) * 4,
+                       prp1, prp2);
+            else
+                return dma_read_prp(n,
+                       (uint8_t *)ns->str_ns_stat,
+                       sizeof(*(ns->str_ns_stat)),
+                       prp1, prp2);
+            break;
+        case NVME_DIR_RCV_ST_OP_RESOURCE:
+            if (ns->str_ns_param->nsa)
+                return NVME_INVALID_FIELD;
+            nsr = dw12 & 0xFFFF;
+            if (nsr > n->str_sys_param->nssa)
+                nsr = n->str_sys_param->nssa;
+            ns->str_ns_param->nsa = nsr;
+            n->str_sys_param->nssa -= nsr;
+            result = cpu_to_le32(nsr);
+            break;
+        default:
+            return NVME_INVALID_FIELD;
+        }
+        break;
+    default:
+        return NVME_INVALID_FIELD;
+    }
+
+    cqe->n.result = result;
+    return NVME_SUCCESS;
+}
+
+int nvme_found_in_str_list(NvmeDirStrNsStat *str_ns_stat, uint16_t dspec)
+{
+    int i;
+
+    if (str_ns_stat->cnt == 0)
+        return -1;
+
+    for (i=0; i<str_ns_stat->cnt; i++)
+        if (str_ns_stat->id[i] == dspec)
+            return i;
+    return -1;
+
+}
+
+void nvme_add_to_str_list(NvmeDirStrNsStat *str_ns_stat, uint16_t dspec)
+{
+   str_ns_stat->id[str_ns_stat->cnt] = dspec;
+   str_ns_stat->cnt++;
+}
+
+void nvme_del_from_str_list(NvmeDirStrNsStat *str_ns_stat, int pos)
+{
+   int i;
+
+   if (str_ns_stat->cnt == 0)
+        return;
+   str_ns_stat->cnt--;
+   for (i=pos; i<str_ns_stat->cnt; i++)
+        str_ns_stat->id[i] = str_ns_stat->id[i+1];
+   str_ns_stat->id[str_ns_stat->cnt] = 0;
+}
+
+void nvme_update_str_stat(FemuCtrl *n, NvmeNamespace *ns, uint16_t dspec)
+{
+    NvmeDirStrNsStat *st = ns->str_ns_stat;
+    if (dspec == 0) /* skip if normal write */
+        return;
+    if (nvme_found_in_str_list(st, dspec) < 0) { /* not found */
+        /* delete the first if max out */
+        if (n->str_sys_param->nsso == n->str_sys_param->msl) {
+        ns->str_ns_param->nso--;
+        n->str_sys_param->nsso--;
+        nvme_del_from_str_list(st, 0);
+        }
+        nvme_add_to_str_list(st, dspec);
+        ns->str_ns_param->nso++;
+        n->str_sys_param->nsso++;
+    }
+   return;
+}
+
+uint16_t nvme_dir_send(FemuCtrl *n, NvmeCmd *cmd)
+{
+    int i;
+    uint32_t nsid = le32_to_cpu(cmd->nsid);
+    //uint64_t prp1 = le64_to_cpu(cmd->prp1);
+    //uint64_t prp2 = le64_to_cpu(cmd->prp2);
+    //uint32_t numd = le32_to_cpu(cmd->cdw10);
+    uint32_t dw11  = le32_to_cpu(cmd->cdw11);
+    uint32_t dw12  = le32_to_cpu(cmd->cdw12);
+    uint16_t dspec = (dw11 >> 16) & 0xFFFF;
+    uint8_t  dtype  = (dw11 >> 8) & 0xFF;
+    uint8_t  doper  = dw11 & 0xFF;
+    uint8_t  tdtype;
+    uint8_t  endir;
+    NvmeNamespace *ns;
+
+    if (nsid != 0xffffffff && (nsid == 0 || nsid > n->num_namespaces)) {
+        return NVME_INVALID_NSID | NVME_DNR;
+    }
+    if (nsid == 0xffffffff)
+        ns = &n->namespaces[0];
+    else
+        ns = &n->namespaces[nsid - 1];
+
+    if (!(n->id_ctrl.oacs & NVME_OACS_DIR))
+        return NVME_INVALID_OPCODE;
+
+    switch (dtype) {
+    case NVME_DIR_TYPE_IDENTIFY:
+        switch (doper) {
+        case NVME_DIR_SND_ID_OP_ENABLE:
+            tdtype = (dw12 >> 8) & 0xFF;
+            endir = dw12 & NVME_DIR_ENDIR;
+            if (tdtype == NVME_DIR_TYPE_STREAMS) {
+                if (endir)
+                    ns->id_dir->dir_enable[0] |= NVME_DIR_IDF_STREAMS;
+                else
+                    ns->id_dir->dir_enable[0] &= ~NVME_DIR_IDF_STREAMS;
+            }
+            break;
+        default:
+            return NVME_INVALID_FIELD;
+        }
+        break;
+    case NVME_DIR_TYPE_STREAMS:
+        switch (doper) {
+        case NVME_DIR_SND_ST_OP_REL_ID:
+            if ((i = nvme_found_in_str_list(ns->str_ns_stat, dspec)) >= 0) {
+                ns->str_ns_param->nso--;
+                n->str_sys_param->nsso--;
+                nvme_del_from_str_list(ns->str_ns_stat, i);
+            }
+            break;
+        case NVME_DIR_SND_ST_OP_REL_RSC:
+            ns->str_ns_param->nsa = 0;
+            n->str_sys_param->nssa = n->str_sys_param->msl;
+            break;
+        default:
+            return NVME_INVALID_FIELD;
+        }
+        break;
+    default:
+        return NVME_INVALID_FIELD;
+    }
+
+    return NVME_SUCCESS;
+}

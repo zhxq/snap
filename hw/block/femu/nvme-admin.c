@@ -999,6 +999,10 @@ static uint16_t nvme_admin_cmd(FemuCtrl *n, NvmeCmd *cmd, NvmeCqe *cqe)
     case NVME_ADM_CMD_SET_DB_MEMORY:
         femu_debug("admin cmd,set_db_memory\n");
         return nvme_set_db_memory(n, cmd);
+    case NVME_ADM_CMD_DIR_SEND:
+        return nvme_dir_send(n, cmd);
+    case NVME_ADM_CMD_DIR_RECEIVE:
+        return nvme_dir_receive(n, cmd, cqe);
     case NVME_ADM_CMD_ACTIVATE_FW:
     case NVME_ADM_CMD_DOWNLOAD_FW:
     case NVME_ADM_CMD_SECURITY_SEND:
