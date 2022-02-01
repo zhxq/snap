@@ -20,13 +20,15 @@ sudo x86_64-softmmu/qemu-system-x86_64 \
     -name "FEMU-BBSSD-VM" \
     -enable-kvm \
     -cpu host \
-    -smp 4 \
-    -m 4G \
+    -smp 8 \
+    -m 24G \
     -device virtio-scsi-pci,id=scsi0 \
     -device scsi-hd,drive=hd0 \
     -drive file=$OSIMGF,if=none,aio=native,cache=none,format=qcow2,id=hd0 \
-    -device femu,devsz_mb=4096,femu_mode=1 \
-    -net user,hostfwd=tcp::8080-:22 \
+    -device femu,devsz_mb=18432,femu_mode=1,stream_support=on,max_streams=16,death_time_prediction=on \
+    -net user,hostfwd=tcp::8080-:22,hostfwd=tcp::18081-:8081,hostfwd=tcp::18082-:8082,hostfwd=tcp::18083-:8083,hostfwd=tcp::18084-:8084 \
     -net nic,model=virtio \
     -nographic \
+    -virtfs local,path=$(mkdir -p ../hostshare && cd ../hostshare && pwd),mount_tag=host0,security_model=passthrough,id=host0 \
+    -device virtio-9p-pci,fsdev=host0,mount_tag=hostshare  \
     -qmp unix:./qmp-sock,server,nowait 2>&1 | tee log
