@@ -22,12 +22,10 @@ config ECC
 config ONENAND
     bool
 
-config NVME_PCI
+config TC58128
     bool
-    default y if PCI_DEVICES
-    depends on PCI
 
-config FEMU_PCI
+config NVME_PCI
     bool
     default y if PCI_DEVICES
     depends on PCI
