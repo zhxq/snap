@@ -12,13 +12,18 @@
 
 // DZ Start
 // Define I/O operations
-#define READ_OP    0
-#define WRITE_OP   1
-#define FLUSH_OP   2
-#define DISCARD_OP 3
+#define READ_OP    0 // Read
+#define WRITE_OP   1 // Write
+#define INITIAL_OP 2 // Supposed to be flush, but not used by SNAP. Consider as record not used before.
+#define DISCARD_OP 3 // Discard
 
 // Define decay factor
 #define DECAY 0.9
+
+// Time Precision in Bits
+#define TIME_PREC_BITS    (15)
+// ms to s
+#define MS_PER_S 1000
 // DZ End
 
 enum {
@@ -172,6 +177,11 @@ struct ssdparams {
     int tt_pls;       /* total # of planes in the SSD */
 
     int tt_luns;      /* total # of LUNs in the SSD */
+
+    int tt_chunks;    /* total # of chunks in the SSD */
+
+    uint64_t epoch;   /* current passed epoch since SSD started */
+    uint64_t max_age;
 };
 
 typedef struct line {
@@ -214,6 +224,7 @@ struct nand_cmd {
 };
 
 // DZ Start
+/*
 struct death_time_track{
     // Define structure for death time analysis
     // Previously calculated average
@@ -222,11 +233,21 @@ struct death_time_track{
     int64_t prev_death_time_prediction;
     #endif
     // Previous access timestamp
-    uint64_t last_access_time;
+    uint64_t age;
     // Previous access I/O operation
     // Can be READ_OP, WRITE_OP, FLUSH_OP or DISCARD_OP
     int last_access_op;
     bool valid;
+};
+*/
+
+struct death_time_track {
+    uint64_t death_time_avg    : TIME_PREC_BITS;
+    uint64_t age               : TIME_PREC_BITS;
+    int last_access_op         : 2;
+    #ifdef FEMU_DEBUG_FTL
+    int64_t prev_death_time_prediction : TIME_PREC_BITS;
+    #endif
 };
 // DZ End
 
@@ -236,7 +257,8 @@ struct ssd {
     struct ssd_channel *ch;
     struct ppa *maptbl; /* page level mapping table */
     // DZ Start
-    // Similar to maptbl, we have a death time analysis which has LBA as key
+    // We have a structure for death time analysis, which splits LBA into chunks
+    // Number of pages/chunk is defined as pages_per_chunk in FEMU start script
     struct death_time_track *death_time_list; /* page level mapping table */
     // DZ End
     uint64_t *rmap;     /* reverse mapptbl, assume it's stored in OOB */

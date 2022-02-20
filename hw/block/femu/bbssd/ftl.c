@@ -33,58 +33,75 @@ static inline void set_maptbl_ent(struct ssd *ssd, uint64_t lpn, struct ppa *ppa
 }
 
 // DZ Start
-static void set_latest_access_time(struct ssd *ssd, uint64_t start_lpn, uint64_t end_lpn, int op)
+static void set_latest_access_time(FemuCtrl *n, struct ssd *ssd, uint64_t start_lpn, uint64_t end_lpn, int op)
 {
-    uint64_t now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+    uint64_t now_real_time = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
+    uint64_t passed_epoch = (now_real_time - ssd->sp.epoch) / MS_PER_S / n->access_interval_precision;
+    int i;
+    if (passed_epoch > 0){
+        // Update the last updated timestamp
+        ssd->sp.epoch += n->access_interval_precision * MS_PER_S * passed_epoch;
+        // Update ages of all pages
+        for (int i = 0; i < ssd->sp.tt_chunks; i++){
+            if ((ssd->death_time_list[i].age + passed_epoch > ssd->sp.max_age)){
+                ssd->death_time_list[i].age = ssd->sp.max_age;
+            }else{
+                ssd->death_time_list[i].age += passed_epoch;
+            }
+        }
+    }
+
     int      prev_op;
     uint64_t prev_avg;
-    uint64_t prev_access_time;
-    uint64_t lpn;
+    uint64_t prev_age;
+    uint64_t start_chunk = start_lpn / n->pages_per_chunk;
+    uint64_t end_chunk = end_lpn / n->pages_per_chunk;
+    uint64_t chunk;
 
-    for (lpn = start_lpn; lpn <= end_lpn; lpn++){
-        if (ssd->death_time_list[lpn].valid){
-            prev_op = ssd->death_time_list[lpn].last_access_op;
-            prev_avg = ssd->death_time_list[lpn].death_time_avg;
-            prev_access_time = ssd->death_time_list[lpn].last_access_time;
+    for (chunk = start_chunk; chunk <= end_chunk; chunk++){
+        if ((ssd->death_time_list[chunk].last_access_op != INITIAL_OP)){
+            prev_op = ssd->death_time_list[chunk].last_access_op;
+            prev_avg = ssd->death_time_list[chunk].death_time_avg;
+            prev_age = ssd->death_time_list[chunk].age;
             
             // Only consider W->W and W->D as death. Update death time avg in this case
             if (prev_op == WRITE_OP){
                 #ifdef FEMU_DEBUG_FTL
-                write_log("%"PRId64",%"PRIu64",%"PRIu64"\n", ssd->death_time_list[lpn].prev_death_time_prediction, now - prev_access_time, lpn);
+                write_log("%"PRId64",%"PRIu64",%"PRIu64"\n", ssd->death_time_list[chunk].prev_death_time_prediction, prev_age, chunk);
                 #endif
                 if (prev_avg > 0){
-                    ssd->death_time_list[lpn].death_time_avg = prev_avg * (1 - DECAY) + (now - prev_access_time) * DECAY;
+                    ssd->death_time_list[chunk].death_time_avg = prev_avg * (1 - DECAY) + prev_age * DECAY;
                 }else{
-                    ssd->death_time_list[lpn].death_time_avg = now - prev_access_time;
+                    ssd->death_time_list[chunk].death_time_avg = prev_age;
                 }
             }else{
                 #ifdef FEMU_DEBUG_FTL
-                write_log("%d,%d,%"PRIu64"\n", -2, -2, lpn);
+                write_log("%d,%d,%"PRIu64"\n", -2, -2, chunk);
                 #endif
             }
 
             #ifdef FEMU_DEBUG_FTL
-            ssd->death_time_list[lpn].prev_death_time_prediction = prev_avg;
+            ssd->death_time_list[chunk].prev_death_time_prediction = prev_avg;
             #endif
-            ssd->death_time_list[lpn].last_access_op = op;
-            ssd->death_time_list[lpn].last_access_time = now;
+            ssd->death_time_list[chunk].last_access_op = op;
+            // Clear age, since this block is now dead
+            ssd->death_time_list[chunk].age = 0;
         }else{
             #ifdef FEMU_DEBUG_FTL
             if (op == WRITE_OP){
-                write_log("%d,%d,%"PRIu64"\n", -1, -1, lpn);
+                write_log("%d,%d,%"PRIu64"\n", -1, -1, chunk);
             }else{
-                write_log("%d,%d,%"PRIu64"\n", -3, -3, lpn);
+                write_log("%d,%d,%"PRIu64"\n", -3, -3, chunk);
             }
             #endif
             if (op == WRITE_OP){
-                for (lpn = start_lpn; lpn <= end_lpn; lpn++){
-                    ssd->death_time_list[lpn].valid = true;
-                    ssd->death_time_list[lpn].death_time_avg = 0;
+                for (chunk = start_chunk; chunk <= end_chunk; chunk++){
+                    ssd->death_time_list[chunk].death_time_avg = 0;
                     #ifdef FEMU_DEBUG_FTL
-                    ssd->death_time_list[lpn].prev_death_time_prediction = -1;
+                    ssd->death_time_list[chunk].prev_death_time_prediction = -1;
                     #endif
-                    ssd->death_time_list[lpn].last_access_op = op;
-                    ssd->death_time_list[lpn].last_access_time = now;
+                    ssd->death_time_list[chunk].last_access_op = op;
+                    ssd->death_time_list[chunk].age = 0;
                 }
             }
         }
@@ -429,13 +446,18 @@ static void ssd_init_maptbl(struct ssd *ssd)
     }
 }
 
-static void ssd_init_death_time(struct ssd *ssd)
+static void ssd_init_death_time(struct ssd *ssd, uint32_t pages_per_chunk)
 {
+    
     struct ssdparams *spp = &ssd->sp;
 
-    ssd->death_time_list = g_malloc0(sizeof(struct death_time_track) * spp->tt_pgs);
-    for (int i = 0; i < spp->tt_pgs; i++) {
-        ssd->death_time_list[i].valid = false;
+    spp->tt_chunks = (spp->tt_pgs - 1) / pages_per_chunk + 1;
+    spp->epoch = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
+    spp->max_age = 1 << TIME_PREC_BITS - 1;
+
+    ssd->death_time_list = g_malloc0(sizeof(struct death_time_track) * spp->tt_chunks);
+    for (int i = 0; i < spp->tt_chunks; i++) {
+        ssd->death_time_list[i].last_access_op = INITIAL_OP;
         ssd->death_time_list[i].death_time_avg = 0;
     }
 }
@@ -469,7 +491,7 @@ void ssd_init(FemuCtrl *n)
     ssd_init_maptbl(ssd);
 
     /* initialize death_time */
-    ssd_init_death_time(ssd);
+    ssd_init_death_time(ssd, n->pages_per_chunk);
 
     /* initialize rmap */
     ssd_init_rmap(ssd);
@@ -948,7 +970,7 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
     // DZ Start
     // This is a write. Update death time and average.
     if (n->death_time_prediction){
-        set_latest_access_time(ssd, start_lpn, end_lpn, WRITE_OP);
+        set_latest_access_time(n, ssd, start_lpn, end_lpn, WRITE_OP);
     }
     // DZ End
 
@@ -990,6 +1012,8 @@ static void ssd_dsm(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req){
     uint64_t lba = req->slba;
     struct ssdparams *spp = &ssd->sp;
     int len = req->nlb;
+    struct ppa ppa;
+    uint64_t lpn;
     uint64_t start_lpn;
     uint64_t end_lpn;
 
@@ -1012,8 +1036,19 @@ static void ssd_dsm(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req){
             if (end_lpn >= spp->tt_pgs) {
                 ftl_err("start_lpn=%"PRIu64",tt_pgs=%d\n", start_lpn, ssd->sp.tt_pgs);
             }
+            // Mark these pages as invalid
+            for (lpn = start_lpn; lpn <= end_lpn; lpn++) {
+                ppa = get_maptbl_ent(ssd, lpn);
+                if (mapped_ppa(&ppa)) {
+                    // This physical page is invalid now
+                    mark_page_invalid(ssd, &ppa);
+                    // This LPN is also invalid now
+                    ssd->maptbl[lpn].ppa = UNMAPPED_PPA;
+                    set_rmap_ent(ssd, INVALID_LPN, &ppa);
+                }
+            }
             if (n->death_time_prediction){
-                set_latest_access_time(ssd, start_lpn, end_lpn, DISCARD_OP);
+                set_latest_access_time(n, ssd, start_lpn, end_lpn, DISCARD_OP);
             }
         }
     }
