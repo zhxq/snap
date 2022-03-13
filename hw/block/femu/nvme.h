@@ -1376,6 +1376,7 @@ typedef struct FemuCtrl {
     bool            death_time_prediction;
     uint32_t        pages_per_chunk;
     uint32_t        access_interval_precision;
+    bool            enable_hashing;
 } FemuCtrl;
 
 typedef struct NvmePollerThreadArgument {

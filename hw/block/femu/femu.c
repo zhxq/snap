@@ -685,7 +685,8 @@ static Property femu_props[] = {
     DEFINE_PROP_UINT8("max_streams", FemuCtrl, msl, 8),
     DEFINE_PROP_BOOL("death_time_prediction", FemuCtrl, death_time_prediction, true),
     DEFINE_PROP_UINT32("pages_per_chunk", FemuCtrl, pages_per_chunk, 128),
-    DEFINE_PROP_UINT32("access_interval_precision", FemuCtrl, access_interval_precision, 16),
+    DEFINE_PROP_UINT32("access_interval_precision", FemuCtrl, access_interval_precision, 32),
+    DEFINE_PROP_BOOL("hashing_support", FemuCtrl, enable_hashing, false),
     DEFINE_PROP_END_OF_LIST(),
 };
 

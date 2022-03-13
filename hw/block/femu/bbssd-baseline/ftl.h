@@ -1,30 +1,11 @@
 #ifndef __FEMU_FTL_H
 #define __FEMU_FTL_H
 
-//#define FEMU_DEBUG_FTL
-
 #include "../nvme.h"
 
 #define INVALID_PPA     (~(0ULL))
 #define INVALID_LPN     (~(0ULL))
 #define UNMAPPED_PPA    (~(0ULL))
-
-
-// DZ Start
-// Define I/O operations
-#define INITIAL_OP    0 // Supposed to be flush, but not used by SNAP. Consider as record not used before.
-#define WRITE_OP      1 // Write
-#define WRITE_ONCE_OP 2 // Only wrote once, will segue into WRITE_OP on next write
-#define DISCARD_OP    3 // Discard
-
-// Define decay factor
-#define DECAY 0.9
-
-// Time Precision in Bits
-#define TIME_PREC_BITS    (15)
-// ms to s
-#define MS_PER_S 1000
-// DZ End
 
 enum {
     NAND_READ =  0,
@@ -34,10 +15,6 @@ enum {
     NAND_READ_LATENCY = 40000,
     NAND_PROG_LATENCY = 200000,
     NAND_ERASE_LATENCY = 2000000,
-    // DZ Start
-    // Define fast programming latency
-    NAND_FAST_PROG_LATENCY = 150000,
-    // DZ End
 };
 
 enum {
@@ -178,14 +155,6 @@ struct ssdparams {
     int tt_pls;       /* total # of planes in the SSD */
 
     int tt_luns;      /* total # of LUNs in the SSD */
-
-    int tt_chunks;    /* total # of chunks in the SSD */
-
-    bool death_time_prediction; /* Death Time Prediction Enabled */
-    bool enable_stream;
-    uint8_t msl;
-    uint64_t epoch;   /* current passed epoch since SSD started */
-    uint64_t max_age;
 };
 
 typedef struct line {
@@ -218,7 +187,6 @@ struct line_mgmt {
     int free_line_cnt;
     int victim_line_cnt;
     int full_line_cnt;
-    uint8_t *block_to_stream;
 };
 
 struct nand_cmd {
@@ -227,51 +195,13 @@ struct nand_cmd {
     int64_t stime; /* Coperd: request arrival time */
 };
 
-// DZ Start
-/*
-struct death_time_track{
-    // Define structure for death time analysis
-    // Previously calculated average
-    uint64_t death_time_avg;
-    #ifdef FEMU_DEBUG_FTL
-    int64_t prev_death_time_prediction;
-    #endif
-    // Previous access timestamp
-    uint64_t age;
-    // Previous access I/O operation
-    // Can be READ_OP, WRITE_OP, FLUSH_OP or DISCARD_OP
-    int last_access_op;
-    bool valid;
-};
-*/
-
-struct wa_info {
-    uint64_t pages_from_host;
-    uint64_t pages_from_gc;
-};
-
-struct death_time_track {
-    uint64_t death_time_avg    : TIME_PREC_BITS;
-    uint64_t age               : TIME_PREC_BITS;
-    int last_access_op         : 2;
-    #ifdef FEMU_DEBUG_FTL
-    int64_t prev_death_time_prediction : TIME_PREC_BITS;
-    #endif
-};
-// DZ End
-
 struct ssd {
     char *ssdname;
     struct ssdparams sp;
     struct ssd_channel *ch;
     struct ppa *maptbl; /* page level mapping table */
-    // DZ Start
-    // We have a structure for death time analysis, which splits LBA into chunks
-    // Number of pages/chunk is defined as pages_per_chunk in FEMU start script
-    struct death_time_track *death_time_list; /* page level mapping table */
-    // DZ End
     uint64_t *rmap;     /* reverse mapptbl, assume it's stored in OOB */
-    struct write_pointer *wp; // We need multiple pointers for multi-stream SSD.
+    struct write_pointer wp;
     struct line_mgmt lm;
 
     /* lockless ring for communication with NVMe IO thread */
