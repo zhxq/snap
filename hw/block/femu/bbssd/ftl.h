@@ -253,7 +253,7 @@ struct wa_info {
 struct death_time_track {
     uint64_t death_time_avg    : TIME_PREC_BITS;
     uint64_t age               : TIME_PREC_BITS;
-    int last_access_op         : 2;
+    uint64_t last_access_op    : 2;
     #ifdef FEMU_DEBUG_FTL
     int64_t prev_death_time_prediction : TIME_PREC_BITS;
     #endif

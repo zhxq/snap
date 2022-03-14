@@ -42,7 +42,6 @@ static void set_latest_access_time(FemuCtrl *n, struct ssd *ssd, uint64_t start_
 {
     uint64_t now_real_time = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
     uint64_t passed_epoch = (now_real_time - ssd->sp.epoch) / MS_PER_S / n->access_interval_precision;
-    int i;
     if (passed_epoch > 0){
         // Update the last updated timestamp
         ssd->sp.epoch += n->access_interval_precision * MS_PER_S * passed_epoch;
@@ -65,10 +64,10 @@ static void set_latest_access_time(FemuCtrl *n, struct ssd *ssd, uint64_t start_
     // If hashing is not enabled, we can just skip to next chunk's page
     // So that the same chunk will not be reupdated
     uint64_t step = n->enable_hashing ? 1 : n->pages_per_chunk;
-
-    if ((ssd->death_time_list[chunk].last_access_op != INITIAL_OP)){
-        for (lpn = start_lpn; lpn <= end_lpn; lpn += step){
-            chunk = lpn_to_chunk(lpn, n->pages_per_chunk);
+    
+    for (lpn = start_lpn; lpn <= end_lpn; lpn += step){
+        chunk = lpn_to_chunk(lpn, n->pages_per_chunk);
+        if ((ssd->death_time_list[chunk].last_access_op != INITIAL_OP)){
             prev_op = ssd->death_time_list[chunk].last_access_op;
             prev_avg = ssd->death_time_list[chunk].death_time_avg;
             prev_age = ssd->death_time_list[chunk].age;
@@ -99,24 +98,24 @@ static void set_latest_access_time(FemuCtrl *n, struct ssd *ssd, uint64_t start_
             ssd->death_time_list[chunk].last_access_op = op;
             // Clear age, since this block is now dead
             ssd->death_time_list[chunk].age = 0;
-        }
-    }else{
-        #ifdef FEMU_DEBUG_FTL
-        if (op == WRITE_OP){
-            write_log("%d,%d,%"PRIu64"\n", -1, -1, chunk);
         }else{
-            write_log("%d,%d,%"PRIu64"\n", -3, -3, chunk);
-        }
-        #endif
-        if (op == WRITE_OP){
-            for (lpn = start_lpn; lpn <= end_lpn; lpn += step){
-                chunk = lpn_to_chunk(lpn, n->pages_per_chunk);
-                ssd->death_time_list[chunk].death_time_avg = 0;
-                #ifdef FEMU_DEBUG_FTL
-                ssd->death_time_list[chunk].prev_death_time_prediction = -1;
-                #endif
-                ssd->death_time_list[chunk].last_access_op = WRITE_ONCE_OP;
-                ssd->death_time_list[chunk].age = 0;
+            #ifdef FEMU_DEBUG_FTL
+            if (op == WRITE_OP){
+                write_log("%d,%d,%"PRIu64"\n", -1, -1, chunk);
+            }else{
+                write_log("%d,%d,%"PRIu64"\n", -3, -3, chunk);
+            }
+            #endif
+            if (op == WRITE_OP){
+                for (lpn = start_lpn; lpn <= end_lpn; lpn += step){
+                    chunk = lpn_to_chunk(lpn, n->pages_per_chunk);
+                    ssd->death_time_list[chunk].death_time_avg = 0;
+                    #ifdef FEMU_DEBUG_FTL
+                    ssd->death_time_list[chunk].prev_death_time_prediction = -1;
+                    #endif
+                    ssd->death_time_list[chunk].last_access_op = WRITE_ONCE_OP;
+                    ssd->death_time_list[chunk].age = 0;
+                }
             }
         }
     }
@@ -261,7 +260,6 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream)
     int i = 0;
     struct ssdparams *spp = &ssd->sp;
     struct write_pointer *wpp = &ssd->wp[stream];
-    struct write_pointer *first_wpp;
     struct write_pointer swap;
     struct line_mgmt *lm = &ssd->lm;
     check_addr(wpp->ch, spp->nchs);
@@ -501,7 +499,7 @@ static void ssd_init_death_time(struct ssd *ssd, uint32_t pages_per_chunk)
 
     spp->tt_chunks = (spp->tt_pgs - 1) / pages_per_chunk + 1;
     spp->epoch = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
-    spp->max_age = 1 << TIME_PREC_BITS - 1;
+    spp->max_age = (1 << TIME_PREC_BITS) - 1;
 
     ssd->death_time_list = g_malloc0(sizeof(struct death_time_track) * spp->tt_chunks);
     for (int i = 0; i < spp->tt_chunks; i++) {
@@ -804,7 +802,6 @@ static uint64_t gc_write_page(struct ssd *ssd, struct ppa *old_ppa)
 {
     struct ppa new_ppa;
     struct nand_lun *new_lun;
-    struct line_mgmt *lm = &ssd->lm;
     uint64_t lpn = get_rmap_ent(ssd, old_ppa);
 
     ftl_assert(valid_lpn(ssd, lpn));
@@ -981,10 +978,6 @@ static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
     return maxlat;
 }
 
-static uint8_t lpn_to_stream(uint64_t lpn){
-
-
-}
 
 static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
 {
@@ -1077,9 +1070,9 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
                 if (prediction > 0){
                     stream_choice = 0;
                 }
+            }else if(ssd->death_time_list[chunk].last_access_op == WRITE_ONCE_OP){
+                stream_choice = 0;
             }
-        }else if(ssd->death_time_list[chunk].last_access_op == WRITE_ONCE_OP){
-            stream_choice = 0;
         }
 
         /* new write */
