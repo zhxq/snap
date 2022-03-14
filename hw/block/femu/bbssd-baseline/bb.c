@@ -71,7 +71,7 @@ static void bb_flip(FemuCtrl *n, NvmeCmd *cmd)
     case FEMU_SHOW_WA_INFO:
         //femu_log("From Host: %"PRIu64", From GC: %"PRIu64"\n", n->ssd->pages_from_host, n->ssd->pages_from_gc);
         sprintf(buffer, "{'host': %"PRIu64", 'gc': %"PRIu64"}", n->ssd->pages_from_host, n->ssd->pages_from_gc);
-        dma_read_prp(n, buffer, sizeof(buffer), prp1, prp2);
+        dma_read_prp(n, (uint8_t *)buffer, sizeof(buffer), prp1, prp2);
         break;
     default:
         printf("FEMU:%s,Not implemented flip cmd (%lu)\n", n->devname, cdw10);

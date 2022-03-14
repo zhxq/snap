@@ -1,4 +1,3 @@
-/build
 /config-devices.*
 /config-all-devices.*
 /config-all-disas.*
@@ -134,3 +133,4 @@ trace-ust-all.c
 build-femu/
 .vscode/
 hostshare/*
+configure2
