@@ -183,6 +183,7 @@ struct ssdparams {
 
     bool death_time_prediction; /* Death Time Prediction Enabled */
     bool enable_stream;
+    bool enable_cascade_stream;
     uint8_t msl;
     uint64_t epoch;   /* current passed epoch since SSD started */
     uint64_t max_age;

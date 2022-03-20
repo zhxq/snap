@@ -303,7 +303,7 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream)
                 // Finally, assign a new block to the last stream
                 // Also, remember stream 0 is reserved for not assigned/garbage collection
                 
-                if (spp->death_time_prediction){
+                if (spp->enable_cascade_stream && spp->death_time_prediction){
                     if (stream > 0){
                         swap = ssd->wp[stream];
                         if (stream != 1){
@@ -359,7 +359,7 @@ static struct ppa get_new_page(struct ssd *ssd, uint8_t stream)
     ppa.g.blk = wpp->blk;
     ppa.g.pl = wpp->pl;
     //printf("Stream: %d, channel: %d, lun: %d, pg: %d, blk: %d, Plane: %d\n", stream, ppa.g.ch, ppa.g.lun, ppa.g.pg, ppa.g.blk, ppa.g.pl);
-    fflush(NULL);
+    //fflush(NULL);
     ftl_assert(ppa.g.pl == 0);
 
     return ppa;
@@ -542,6 +542,7 @@ void ssd_init(FemuCtrl *n)
     // Pass number of streams supported
     spp->enable_stream = n->enable_stream;
     spp->msl = n->msl;
+    spp->enable_cascade_stream = n->enable_cascade_stream;
 
     /* initialize maptbl */
     ssd_init_maptbl(ssd);
@@ -1047,7 +1048,9 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
             set_rmap_ent(ssd, INVALID_LPN, &ppa);
         }
         
-        if (spp->death_time_prediction){
+        if (dspec > 0){
+            stream_choice = dspec;
+        }else if (spp->death_time_prediction){
             stream_choice = 0;
             chunk = lpn_to_chunk(lpn, n->pages_per_chunk);
             if (ssd->death_time_list[chunk].last_access_op != INITIAL_OP && ssd->death_time_list[chunk].last_access_op != WRITE_ONCE_OP){
