@@ -323,6 +323,8 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream)
                 if (spp->enable_cascade_stream && spp->death_time_prediction){
                     write_log("Stream %d block is full.\n", stream);
                     if (stream > 0){
+                        // Old Rotation Method
+                        /*
                         write_log("Copying wp of stream %d.\n", stream);
                         swap = ssd->wp[stream];
                         if (stream != 1){
@@ -341,6 +343,16 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream)
                         ssd->wp[spp->msl] = swap;
                         write_log("Now wpp variable is the wp of stream %d.\n", spp->msl);
                         wpp = &ssd->wp[spp->msl];
+                        */
+                        // New Rotation Method:
+                        // stream S is full, then rotate 1->2, 2->3, ..., S-1 -> S
+                        // Put new write pointer to stream 1
+                        swap = ssd->wp[stream];
+                        for (i = stream; i > 1; i--){
+                            ssd->wp[i] = ssd->wp[i - 1];
+                        }
+                        ssd->wp[1] = swap;
+                        wpp = &ssd->wp[1];
                     }else{
                         // Stream is 0
                         // Don't need to do anything here

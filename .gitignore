@@ -134,3 +134,4 @@ build-femu/
 .vscode/
 hostshare/*
 configure2
+/build
