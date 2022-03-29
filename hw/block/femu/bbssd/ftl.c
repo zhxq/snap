@@ -38,6 +38,28 @@ static uint64_t lpn_to_chunk(uint64_t lpn, uint32_t pages_per_chunk){
     return lpn / pages_per_chunk;
 }
 
+static uint64_t get_chunk_list(FemuCtrl *n, struct ssd *ssd, uint64_t start_lpn, uint64_t end_lpn, uint64_t* chunks){
+    uint64_t i;
+    write_log("Calculating chunks from LPN %"PRIu64" to LPN %"PRIu64"\n", start_lpn, end_lpn);
+    if (n->enable_hashing){
+        for (i = start_lpn; i <= end_lpn; i++){
+            chunks[i - start_lpn] = lpn_to_chunk(i, n->pages_per_chunk);
+            write_log("LPN %"PRIu64" has chunk num: %"PRIu64"\n", i, chunks[i - start_lpn]);
+        }
+        return (end_lpn - start_lpn) + 1;
+    }else{
+        uint64_t start_chunk = lpn_to_chunk(start_lpn, n->pages_per_chunk);
+        write_log("Start LPN %"PRIu64" has chunk num: %"PRIu64"\n", start_lpn, start_chunk);
+        uint64_t end_chunk = lpn_to_chunk(end_lpn, n->pages_per_chunk);
+        write_log("End LPN %"PRIu64" has chunk num: %"PRIu64"\n", end_lpn, end_chunk);
+        for (i = start_chunk; i <= end_chunk; i++){
+            chunks[i - start_chunk] = i;
+            write_log("Chunk i=%"PRIu64" has chunk num: %"PRIu64"\n", i - start_chunk, chunks[i - start_chunk]);
+        }
+        return (end_chunk - start_chunk) + 1;
+    }
+}
+
 static void set_latest_access_time(FemuCtrl *n, struct ssd *ssd, uint64_t start_lpn, uint64_t end_lpn, int op)
 {
     uint64_t now_real_time = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
@@ -58,37 +80,39 @@ static void set_latest_access_time(FemuCtrl *n, struct ssd *ssd, uint64_t start_
     int      prev_op;
     uint64_t prev_avg;
     uint64_t prev_age;
-    uint64_t lpn;
+    uint64_t i;
     uint64_t chunk;
 
     // If hashing is not enabled, we can just skip to next chunk's page
     // So that the same chunk will not be reupdated
-    uint64_t step = n->enable_hashing ? 1 : n->pages_per_chunk;
+    uint64_t *chunks = g_malloc0(sizeof(uint64_t) * ((end_lpn - start_lpn) + 1));
+    uint64_t num_chunks = get_chunk_list(n, ssd, start_lpn, end_lpn, chunks);
     
-    for (lpn = start_lpn; lpn <= end_lpn; lpn += step){
-        chunk = lpn_to_chunk(lpn, n->pages_per_chunk);
-        if ((ssd->death_time_list[chunk].last_access_op != INITIAL_OP)){
+    for (i = 0; i < num_chunks; i++){
+        chunk = chunks[i];
+        if (ssd->death_time_list[chunk].last_access_op != INITIAL_OP){
             prev_op = ssd->death_time_list[chunk].last_access_op;
             prev_avg = ssd->death_time_list[chunk].death_time_avg;
             prev_age = ssd->death_time_list[chunk].age;
             
             // Only consider W->W and W->D as death. Update death time avg in this case
             if (prev_op == WRITE_OP || prev_op == WRITE_ONCE_OP){
-                #ifdef FEMU_DEBUG_FTL
-                write_log("%"PRId64",%"PRIu64",%"PRIu64"\n", ssd->death_time_list[chunk].prev_death_time_prediction, prev_age, chunk);
-                #endif
                 if (prev_avg > 0){
                     ssd->death_time_list[chunk].death_time_avg = prev_avg * (1 - DECAY) + prev_age * DECAY;
+                    write_log("Old prediction: %"PRIu64", age: %"PRIu64", new prediction: %d, Chunk: %"PRIu64"\n", prev_avg, prev_age, ssd->death_time_list[chunk].death_time_avg, chunk);
                 }else{
                     if (likely(prev_op == WRITE_OP)){
                         ssd->death_time_list[chunk].death_time_avg = prev_avg * (1 - DECAY) + prev_age * DECAY;
+                        write_log("Old prediction: %"PRIu64", age: %"PRIu64", new prediction: %d, Chunk: %"PRIu64"\n", prev_avg, prev_age, ssd->death_time_list[chunk].death_time_avg, chunk);
                     }else{
+                        ftl_assert(prev_avg == 0);
+                        write_log("First death, age: %"PRIu64", new prediction: %"PRIu64", Chunk: %"PRIu64"\n", prev_age, prev_age, chunk);
                         ssd->death_time_list[chunk].death_time_avg = prev_age;
                     }
                 }
             }else{
                 #ifdef FEMU_DEBUG_FTL
-                write_log("%d,%d,%"PRIu64"\n", -2, -2, chunk);
+                //write_log("Discard for chunk: %"PRIu64"\n", chunk);
                 #endif
             }
 
@@ -99,23 +123,17 @@ static void set_latest_access_time(FemuCtrl *n, struct ssd *ssd, uint64_t start_
             // Clear age, since this block is now dead
             ssd->death_time_list[chunk].age = 0;
         }else{
-            #ifdef FEMU_DEBUG_FTL
             if (op == WRITE_OP){
-                write_log("%d,%d,%"PRIu64"\n", -1, -1, chunk);
+                chunk = chunks[i];
+                ssd->death_time_list[chunk].death_time_avg = 0;
+                #ifdef FEMU_DEBUG_FTL
+                ssd->death_time_list[chunk].prev_death_time_prediction = 0;
+                write_log("First time write at chunk: %"PRIu64"\n", chunk);
+                #endif
+                ssd->death_time_list[chunk].last_access_op = WRITE_ONCE_OP;
+                ssd->death_time_list[chunk].age = 0;
             }else{
-                write_log("%d,%d,%"PRIu64"\n", -3, -3, chunk);
-            }
-            #endif
-            if (op == WRITE_OP){
-                for (lpn = start_lpn; lpn <= end_lpn; lpn += step){
-                    chunk = lpn_to_chunk(lpn, n->pages_per_chunk);
-                    ssd->death_time_list[chunk].death_time_avg = 0;
-                    #ifdef FEMU_DEBUG_FTL
-                    ssd->death_time_list[chunk].prev_death_time_prediction = -1;
-                    #endif
-                    ssd->death_time_list[chunk].last_access_op = WRITE_ONCE_OP;
-                    ssd->death_time_list[chunk].age = 0;
-                }
+                write_log("Discarding never-used chunk: %"PRIu64"\n", chunk);
             }
         }
     }
@@ -302,21 +320,26 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream)
 
                 // Finally, assign a new block to the last stream
                 // Also, remember stream 0 is reserved for not assigned/garbage collection
-                
                 if (spp->enable_cascade_stream && spp->death_time_prediction){
+                    write_log("Stream %d block is full.\n", stream);
                     if (stream > 0){
+                        write_log("Copying wp of stream %d.\n", stream);
                         swap = ssd->wp[stream];
                         if (stream != 1){
                             // Assign first stream's write pointer to that stream
+                            write_log("Assigning wp of stream 1 to stream %d.\n", stream);
                             ssd->wp[stream] = ssd->wp[1];
                         }
 
                         // Rotate blocks of streams
                         for (i = 2; i <= spp->msl; i++){
+                            write_log("Rotate wp of %d to %d.\n", i, i - 1);
                             ssd->wp[i - 1] = ssd->wp[i];
                         }
                         // Last stream now has the "fresh" write pointer
+                        write_log("Assigning wp of stream %d to stream %d.\n", stream, spp->msl);
                         ssd->wp[spp->msl] = swap;
+                        write_log("Now wpp variable is the wp of stream %d.\n", spp->msl);
                         wpp = &ssd->wp[spp->msl];
                     }else{
                         // Stream is 0
@@ -998,9 +1021,9 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
         
         // Also, dspec will decrease by 1 for other streams before being passed to the device.
         nvme_update_str_stat(n, ns, dspec);
-        write_log("NVME_RW_DTYPE_STREAMS Got this for stream: %d\n", dspec);
+        //write_log("NVME_RW_DTYPE_STREAMS Got this for stream: %d\n", dspec);
     }else{
-        write_log("Stream not set: %d\n", dspec);
+        //write_log("Stream not set: %d\n", dspec);
         dspec = 0;
     }
 
@@ -1020,7 +1043,9 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
     int i;
     int r;
 
-    write_log("%s, opcode:%#x, start_sec:%#lx, size:%#lx, streamenabled:%d, dspec:%#x\n", __func__, rw->opcode, start_lpn * ssd->sp.secs_per_pg, (end_lpn - start_lpn + 1) * ssd->sp.secsz * ssd->sp.secs_per_pg, stream, dspec);
+    write_log("++++Write start LPN: %"PRIu64", end LPN: %"PRIu64", given stream: %d, now start++++\n", start_lpn, end_lpn, dspec);
+
+    //write_log("%s, opcode:%#x, start_sec:%#lx, size:%#lx, streamenabled:%d, dspec:%#x\n", __func__, rw->opcode, start_lpn * ssd->sp.secs_per_pg, (end_lpn - start_lpn + 1) * ssd->sp.secsz * ssd->sp.secs_per_pg, stream, dspec);
 
     if (end_lpn >= spp->tt_pgs) {
         ftl_err("start_lpn=%"PRIu64",tt_pgs=%d\n", start_lpn, ssd->sp.tt_pgs);
@@ -1073,8 +1098,10 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
                 if (prediction > 0){
                     stream_choice = 0;
                 }
+                write_log("Addr: %"PRIu64", Chunk: %"PRIu64", Avg Life: %d, Assigned to stream: %d.\n", lpn, chunk, ssd->death_time_list[chunk].death_time_avg, stream_choice);
             }else if(ssd->death_time_list[chunk].last_access_op == WRITE_ONCE_OP){
                 stream_choice = 0;
+                write_log("Addr: %"PRIu64", Chunk: %"PRIu64", First time written, no DT info, assigned to stream 0.\n", lpn, chunk);
             }
         }
 
@@ -1098,7 +1125,7 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
         curlat = ssd_advance_status(ssd, &ppa, &swr);
         maxlat = (curlat > maxlat) ? curlat : maxlat;
     }
-
+    write_log("----Write start LPN: %"PRIu64", end LPN: %"PRIu64", given stream: %d, now end----\n", start_lpn, end_lpn, dspec);
     return maxlat;
 }
 

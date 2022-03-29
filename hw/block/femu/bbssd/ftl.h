@@ -66,6 +66,7 @@ enum {
     FEMU_ENABLE_LOG = 6,
     FEMU_DISABLE_LOG = 7,
     FEMU_SHOW_WA_INFO = 8,
+    FEMU_LOG_FLUSH = 9,
 };
 
 
@@ -235,7 +236,7 @@ struct death_time_track{
     // Previously calculated average
     uint64_t death_time_avg;
     #ifdef FEMU_DEBUG_FTL
-    int64_t prev_death_time_prediction;
+    uint64_t prev_death_time_prediction;
     #endif
     // Previous access timestamp
     uint64_t age;
@@ -256,7 +257,7 @@ struct death_time_track {
     uint64_t age               : TIME_PREC_BITS;
     uint64_t last_access_op    : 2;
     #ifdef FEMU_DEBUG_FTL
-    int64_t prev_death_time_prediction : TIME_PREC_BITS;
+    uint64_t prev_death_time_prediction : TIME_PREC_BITS;
     #endif
 };
 // DZ End
