@@ -209,6 +209,14 @@ struct write_pointer {
     int pl;
 };
 
+struct stream_info {
+    uint64_t stream_min_time;
+    uint64_t stream_max_time;
+    uint64_t age;
+    uint64_t avg_full_interval;
+    bool fulled_before;
+}
+
 struct line_mgmt {
     struct line *lines;
     /* free line list, we only need to maintain a list of blk numbers */
@@ -271,6 +279,7 @@ struct ssd {
     // We have a structure for death time analysis, which splits LBA into chunks
     // Number of pages/chunk is defined as pages_per_chunk in FEMU start script
     struct death_time_track *death_time_list; /* page level mapping table */
+    struct stream_info *stream_info;
     // DZ End
     uint64_t *rmap;     /* reverse mapptbl, assume it's stored in OOB */
     struct write_pointer *wp; // We need multiple pointers for multi-stream SSD.

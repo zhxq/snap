@@ -1,5 +1,5 @@
-#include "ftl.h"
-
+#include "./ftl.h"
+#include <math.h>
 #ifdef FEMU_DEBUG_FTL
 FILE * femu_log_file;
 #define write_log(fmt, ...) \
@@ -74,6 +74,9 @@ static void set_latest_access_time(FemuCtrl *n, struct ssd *ssd, uint64_t start_
             }else{
                 ssd->death_time_list[i].age += passed_epoch;
             }
+        }
+        for (int i = 0; i < ssd->sp.msl; i++){
+            ssd->stream_info[i].age += passed_epoch;
         }
     }
 
@@ -233,7 +236,9 @@ static void ssd_init_write_pointer(struct ssd *ssd, uint8_t streams)
 {
     // n streams -> n+1 write pointers since we need stream 0 as default stream.
     ssd->wp = g_malloc0(sizeof(struct write_pointer) * (streams + 1));
+    ssd->stream_info = g_malloc0(sizeof(struct stream_info) * (streams + 1));
     struct write_pointer *wpp = NULL;
+    struct stream_info *si = NULL;
     struct line_mgmt *lm = &ssd->lm;
     struct line *curline = NULL;
 
@@ -242,6 +247,7 @@ static void ssd_init_write_pointer(struct ssd *ssd, uint8_t streams)
         QTAILQ_REMOVE(&lm->free_line_list, curline, entry);
         lm->free_line_cnt--;
         wpp = &ssd->wp[i];
+        si = &ssd->stream_info[i];
         /* wpp->curline is always our next-to-write super-block */
         wpp->curline = curline;
         wpp->ch = 0;
@@ -249,6 +255,11 @@ static void ssd_init_write_pointer(struct ssd *ssd, uint8_t streams)
         wpp->pg = 0;
         wpp->blk = i;
         wpp->pl = 0;
+        si->stream_min_time = pow(2, i - 1) - 1;
+        si->stream_max_time = pow(2, i) - 1;
+        si->avg_full_interval = 0;
+        si->age = 0;
+        si->fulled_before = false;
     }
 }
 
@@ -278,8 +289,15 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream)
     int i = 0;
     struct ssdparams *spp = &ssd->sp;
     struct write_pointer *wpp = &ssd->wp[stream];
+    struct stream_info *si = &ssd->stream_info[stream];
+    if (spp->death_time_prediction && si->stream_max_time < ssd->sp.epoch){
+        si->stream_max_time = ssd->sp.epoch;
+    }
+    struct stream_info *cur_si = NULL;
+    struct stream_info *prev_si = NULL;
     struct write_pointer swap;
     struct line_mgmt *lm = &ssd->lm;
+    uint64_t stream_avg_full_interval = 0;
     check_addr(wpp->ch, spp->nchs);
     wpp->ch++;
     if (wpp->ch == spp->nchs) {
@@ -323,36 +341,25 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream)
                 if (spp->enable_cascade_stream && spp->death_time_prediction){
                     write_log("Stream %d block is full.\n", stream);
                     if (stream > 0){
-                        // Old Rotation Method
-                        /*
-                        write_log("Copying wp of stream %d.\n", stream);
-                        swap = ssd->wp[stream];
-                        if (stream != 1){
-                            // Assign first stream's write pointer to that stream
-                            write_log("Assigning wp of stream 1 to stream %d.\n", stream);
-                            ssd->wp[stream] = ssd->wp[1];
+                        // If a stream is full, we try to rotate the latter one to front.
+                        // However, some requirements must be met.
+                        // All data in the next stream should die before this fulled stream fulls again.
+
+                        // First, update the avg full interval of this stream.
+                        if (si->fulled_before){
+                            si->avg_full_interval = si->avg_full_interval * (1 - DECAY) + si->age * DECAY;
+                        }else{
+                            si->avg_full_interval = si->age;
+                            si->fulled_before = true;
+                        }
+                        si->age = 0;
+                        stream_avg_full_interval = si->avg_full_interval;
+
+                        for (i = stream + 1; i <= spp->msl; i++){
+                            cur_si = &ssd->stream_info[i];
+                            prev_si = &ssd->stream_info[i - 1];
                         }
 
-                        // Rotate blocks of streams
-                        for (i = 2; i <= spp->msl; i++){
-                            write_log("Rotate wp of %d to %d.\n", i, i - 1);
-                            ssd->wp[i - 1] = ssd->wp[i];
-                        }
-                        // Last stream now has the "fresh" write pointer
-                        write_log("Assigning wp of stream %d to stream %d.\n", stream, spp->msl);
-                        ssd->wp[spp->msl] = swap;
-                        write_log("Now wpp variable is the wp of stream %d.\n", spp->msl);
-                        wpp = &ssd->wp[spp->msl];
-                        */
-                        // New Rotation Method:
-                        // stream S is full, then rotate 1->2, 2->3, ..., S-1 -> S
-                        // Put new write pointer to stream 1
-                        swap = ssd->wp[stream];
-                        for (i = stream; i > 1; i--){
-                            ssd->wp[i] = ssd->wp[i - 1];
-                        }
-                        ssd->wp[1] = swap;
-                        wpp = &ssd->wp[1];
                     }else{
                         // Stream is 0
                         // Don't need to do anything here
@@ -1062,7 +1069,7 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
     if (end_lpn >= spp->tt_pgs) {
         ftl_err("start_lpn=%"PRIu64",tt_pgs=%d\n", start_lpn, ssd->sp.tt_pgs);
     }
-
+ 
     while (should_gc_high(ssd)) {
         /* perform GC here until !should_gc(ssd) */
         r = do_gc(ssd, true);
