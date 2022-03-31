@@ -72,7 +72,7 @@ static uint64_t get_passed_epoch_since_start(struct ssd *ssd){
     return system_epoch;
 }
 
-static uint64_t get_uptime(struct ssd *ssd){
+uint64_t get_uptime(struct ssd *ssd){
     uint64_t now_real_time = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
     uint64_t uptime = (now_real_time - ssd->sp.start_time) / MS_PER_S;
     return uptime;
@@ -1004,9 +1004,7 @@ static int do_gc(struct ssd *ssd, bool force)
     ftl_debug("GC-ing line:%d,ipc=%d,victim=%d,full=%d,free=%d\n", ppa.g.blk,
               victim_line->ipc, ssd->lm.victim_line_cnt, ssd->lm.full_line_cnt,
               ssd->lm.free_line_cnt);
-    //write_log("GC-ing line:%d,ipc=%d,victim=%d,full=%d,free=%d\n", ppa.g.blk,
-              victim_line->ipc, ssd->lm.victim_line_cnt, ssd->lm.full_line_cnt,
-              ssd->lm.free_line_cnt);
+    //write_log("GC-ing line:%d,ipc=%d,victim=%d,full=%d,free=%d\n", ppa.g.blk, victim_line->ipc, ssd->lm.victim_line_cnt, ssd->lm.full_line_cnt, ssd->lm.free_line_cnt);
 
     /* copy back valid data */
     for (ch = 0; ch < spp->nchs; ch++) {

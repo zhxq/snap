@@ -298,7 +298,7 @@ struct ssd {
 
 void ssd_init(FemuCtrl *n);
 
-static uint64_t get_uptime(struct ssd *ssd);
+uint64_t get_uptime(struct ssd *ssd);
 
 #ifdef FEMU_DEBUG_FTL
 #define ftl_debug(fmt, ...) \
