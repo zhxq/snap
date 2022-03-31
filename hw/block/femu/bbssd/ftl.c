@@ -40,33 +40,50 @@ static uint64_t lpn_to_chunk(uint64_t lpn, uint32_t pages_per_chunk){
 
 static uint64_t get_chunk_list(FemuCtrl *n, struct ssd *ssd, uint64_t start_lpn, uint64_t end_lpn, uint64_t* chunks){
     uint64_t i;
-    write_log("Calculating chunks from LPN %"PRIu64" to LPN %"PRIu64"\n", start_lpn, end_lpn);
+    //write_log("Calculating chunks from LPN %"PRIu64" to LPN %"PRIu64"\n", start_lpn, end_lpn);
     if (n->enable_hashing){
         for (i = start_lpn; i <= end_lpn; i++){
             chunks[i - start_lpn] = lpn_to_chunk(i, n->pages_per_chunk);
-            write_log("LPN %"PRIu64" has chunk num: %"PRIu64"\n", i, chunks[i - start_lpn]);
+            //write_log("LPN %"PRIu64" has chunk num: %"PRIu64"\n", i, chunks[i - start_lpn]);
         }
         return (end_lpn - start_lpn) + 1;
     }else{
         uint64_t start_chunk = lpn_to_chunk(start_lpn, n->pages_per_chunk);
-        write_log("Start LPN %"PRIu64" has chunk num: %"PRIu64"\n", start_lpn, start_chunk);
+        //write_log("Start LPN %"PRIu64" has chunk num: %"PRIu64"\n", start_lpn, start_chunk);
         uint64_t end_chunk = lpn_to_chunk(end_lpn, n->pages_per_chunk);
-        write_log("End LPN %"PRIu64" has chunk num: %"PRIu64"\n", end_lpn, end_chunk);
+        //write_log("End LPN %"PRIu64" has chunk num: %"PRIu64"\n", end_lpn, end_chunk);
         for (i = start_chunk; i <= end_chunk; i++){
             chunks[i - start_chunk] = i;
-            write_log("Chunk i=%"PRIu64" has chunk num: %"PRIu64"\n", i - start_chunk, chunks[i - start_chunk]);
+            //write_log("Chunk i=%"PRIu64" has chunk num: %"PRIu64"\n", i - start_chunk, chunks[i - start_chunk]);
         }
         return (end_chunk - start_chunk) + 1;
     }
 }
 
+static uint64_t get_passed_epoch_since_update(struct ssd *ssd){
+    uint64_t now_real_time = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
+    uint64_t passed_epoch = (now_real_time - ssd->sp.epoch) / MS_PER_S / ssd->sp.access_interval_precision;
+    return passed_epoch;
+}
+
+static uint64_t get_passed_epoch_since_start(struct ssd *ssd){
+    uint64_t now_real_time = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
+    uint64_t system_epoch = (now_real_time - ssd->sp.start_time) / MS_PER_S / ssd->sp.access_interval_precision;
+    return system_epoch;
+}
+
+static uint64_t get_uptime(struct ssd *ssd){
+    uint64_t now_real_time = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
+    uint64_t uptime = (now_real_time - ssd->sp.start_time) / MS_PER_S;
+    return uptime;
+}
+
 static void set_latest_access_time(FemuCtrl *n, struct ssd *ssd, uint64_t start_lpn, uint64_t end_lpn, int op)
 {
-    uint64_t now_real_time = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
-    uint64_t passed_epoch = (now_real_time - ssd->sp.epoch) / MS_PER_S / n->access_interval_precision;
+    uint64_t passed_epoch = get_passed_epoch_since_update(ssd);
     if (passed_epoch > 0){
         // Update the last updated timestamp
-        ssd->sp.epoch += n->access_interval_precision * MS_PER_S * passed_epoch;
+        ssd->sp.epoch += ssd->sp.access_interval_precision * MS_PER_S * passed_epoch;
         // Update ages of all pages
         for (int i = 0; i < ssd->sp.tt_chunks; i++){
             if ((ssd->death_time_list[i].age + passed_epoch > ssd->sp.max_age)){
@@ -102,20 +119,20 @@ static void set_latest_access_time(FemuCtrl *n, struct ssd *ssd, uint64_t start_
             if (prev_op == WRITE_OP || prev_op == WRITE_ONCE_OP){
                 if (prev_avg > 0){
                     ssd->death_time_list[chunk].death_time_avg = prev_avg * (1 - DECAY) + prev_age * DECAY;
-                    write_log("Old prediction: %"PRIu64", age: %"PRIu64", new prediction: %d, Chunk: %"PRIu64"\n", prev_avg, prev_age, ssd->death_time_list[chunk].death_time_avg, chunk);
+                    //write_log("Old prediction: %"PRIu64", age: %"PRIu64", new prediction: %d, Chunk: %"PRIu64"\n", prev_avg, prev_age, ssd->death_time_list[chunk].death_time_avg, chunk);
                 }else{
                     if (likely(prev_op == WRITE_OP)){
                         ssd->death_time_list[chunk].death_time_avg = prev_avg * (1 - DECAY) + prev_age * DECAY;
-                        write_log("Old prediction: %"PRIu64", age: %"PRIu64", new prediction: %d, Chunk: %"PRIu64"\n", prev_avg, prev_age, ssd->death_time_list[chunk].death_time_avg, chunk);
+                        //write_log("Old prediction: %"PRIu64", age: %"PRIu64", new prediction: %d, Chunk: %"PRIu64"\n", prev_avg, prev_age, ssd->death_time_list[chunk].death_time_avg, chunk);
                     }else{
                         ftl_assert(prev_avg == 0);
-                        write_log("First death, age: %"PRIu64", new prediction: %"PRIu64", Chunk: %"PRIu64"\n", prev_age, prev_age, chunk);
+                        //write_log("First death, age: %"PRIu64", new prediction: %"PRIu64", Chunk: %"PRIu64"\n", prev_age, prev_age, chunk);
                         ssd->death_time_list[chunk].death_time_avg = prev_age;
                     }
                 }
             }else{
                 #ifdef FEMU_DEBUG_FTL
-                //write_log("Discard for chunk: %"PRIu64"\n", chunk);
+                ////write_log("Discard for chunk: %"PRIu64"\n", chunk);
                 #endif
             }
 
@@ -131,12 +148,12 @@ static void set_latest_access_time(FemuCtrl *n, struct ssd *ssd, uint64_t start_
                 ssd->death_time_list[chunk].death_time_avg = 0;
                 #ifdef FEMU_DEBUG_FTL
                 ssd->death_time_list[chunk].prev_death_time_prediction = 0;
-                write_log("First time write at chunk: %"PRIu64"\n", chunk);
+                //write_log("First time write at chunk: %"PRIu64"\n", chunk);
                 #endif
                 ssd->death_time_list[chunk].last_access_op = WRITE_ONCE_OP;
                 ssd->death_time_list[chunk].age = 0;
             }else{
-                write_log("Discarding never-used chunk: %"PRIu64"\n", chunk);
+                //write_log("Discarding never-used chunk: %"PRIu64"\n", chunk);
             }
         }
     }
@@ -241,7 +258,7 @@ static void ssd_init_write_pointer(struct ssd *ssd, uint8_t streams)
     struct stream_info *si = NULL;
     struct line_mgmt *lm = &ssd->lm;
     struct line *curline = NULL;
-
+    uint64_t passed_epoch_since_start = get_passed_epoch_since_start(ssd);
     for (int i = 0; i <= streams; i++){
         curline = QTAILQ_FIRST(&lm->free_line_list);
         QTAILQ_REMOVE(&lm->free_line_list, curline, entry);
@@ -255,8 +272,8 @@ static void ssd_init_write_pointer(struct ssd *ssd, uint8_t streams)
         wpp->pg = 0;
         wpp->blk = i;
         wpp->pl = 0;
-        si->stream_min_time = pow(2, i - 1) - 1;
-        si->stream_max_time = pow(2, i) - 1;
+        si->stream_min_time = passed_epoch_since_start + pow(2, i - 1) - 1;
+        si->stream_max_time = passed_epoch_since_start + pow(2, i) - 1;
         si->avg_full_interval = 0;
         si->age = 0;
         si->fulled_before = false;
@@ -290,14 +307,15 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream)
     struct ssdparams *spp = &ssd->sp;
     struct write_pointer *wpp = &ssd->wp[stream];
     struct stream_info *si = &ssd->stream_info[stream];
-    if (spp->death_time_prediction && si->stream_max_time < ssd->sp.epoch){
-        si->stream_max_time = ssd->sp.epoch;
+    uint64_t passed_epoch_since_start = get_passed_epoch_since_start(ssd);
+    if (spp->death_time_prediction && si->stream_max_time < passed_epoch_since_start){
+        si->stream_max_time = passed_epoch_since_start;
     }
     struct stream_info *cur_si = NULL;
     struct stream_info *prev_si = NULL;
     struct write_pointer swap;
     struct line_mgmt *lm = &ssd->lm;
-    uint64_t stream_avg_full_interval = 0;
+    int last_rotated = -1;
     check_addr(wpp->ch, spp->nchs);
     wpp->ch++;
     if (wpp->ch == spp->nchs) {
@@ -339,25 +357,52 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream)
                 // Finally, assign a new block to the last stream
                 // Also, remember stream 0 is reserved for not assigned/garbage collection
                 if (spp->enable_cascade_stream && spp->death_time_prediction){
-                    write_log("Stream %d block is full.\n", stream);
+                    //write_log("Stream %d block is full.\n", stream);
                     if (stream > 0){
                         // If a stream is full, we try to rotate the latter one to front.
                         // However, some requirements must be met.
                         // All data in the next stream should die before this fulled stream fulls again.
-
+                        swap = ssd->wp[stream];
                         // First, update the avg full interval of this stream.
                         if (si->fulled_before){
+                            //write_log("Stream %d prev avg full interval: %"PRIu64"\n", stream, si->avg_full_interval);
                             si->avg_full_interval = si->avg_full_interval * (1 - DECAY) + si->age * DECAY;
+                            //write_log("Stream %d new avg full interval: %"PRIu64"\n", stream, si->avg_full_interval);
                         }else{
+                            //write_log("Stream %d first full\n", stream);
                             si->avg_full_interval = si->age;
+                            //write_log("Stream %d new avg full interval: %"PRIu64"\n", stream, si->avg_full_interval);
                             si->fulled_before = true;
                         }
                         si->age = 0;
-                        stream_avg_full_interval = si->avg_full_interval;
 
                         for (i = stream + 1; i <= spp->msl; i++){
-                            cur_si = &ssd->stream_info[i];
+                            //write_log("Trying to rotate %d to %d\n", i, i - 1);
                             prev_si = &ssd->stream_info[i - 1];
+                            //write_log("Stream %d has max time %"PRIu64", full interval %"PRIu64"\n", i - 1, prev_si->stream_max_time, prev_si->avg_full_interval);
+                            cur_si = &ssd->stream_info[i];
+                            //write_log("Stream %d has max time %"PRIu64", full interval %"PRIu64"\n", i, cur_si->stream_max_time, cur_si->avg_full_interval);
+                            
+                            if (passed_epoch_since_start + prev_si->avg_full_interval <= cur_si->stream_min_time && passed_epoch_since_start + prev_si->avg_full_interval >= cur_si->stream_max_time){
+                                prev_si->stream_max_time = cur_si->stream_max_time;
+                                ssd->wp[i - 1] = ssd->wp[i];
+                                last_rotated = i;
+                                write_log("!!!Rotated %d to %d at time: %"PRIu64"\n", i, i - 1, get_uptime(ssd));
+                            }else{
+                                //write_log("Cannot rotate %d to %d, aborting\n", i, i - 1);
+                                break;
+                            }
+                        }
+
+                        if (last_rotated > 1){
+                            //write_log("Assigning empty write pointer to new empty stream %d\n", i);
+                            ssd->wp[last_rotated] = swap;
+                            wpp = &ssd->wp[last_rotated];
+                            
+                            ssd->stream_info[stream].stream_min_time = passed_epoch_since_start + pow(2, stream - 1) - 1;
+                            ssd->stream_info[stream].stream_max_time = passed_epoch_since_start + pow(2, stream) - 1;
+                            //write_log("Stream %d min time is now %"PRIu64"\n", stream, ssd->stream_info[stream].stream_min_time);
+                            //write_log("Stream %d max time is now %"PRIu64"\n", stream, ssd->stream_info[stream].stream_max_time);
                         }
 
                     }else{
@@ -541,6 +586,8 @@ static void ssd_init_death_time(struct ssd *ssd, uint32_t pages_per_chunk)
 
     spp->tt_chunks = (spp->tt_pgs - 1) / pages_per_chunk + 1;
     spp->epoch = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
+    spp->start_time = spp->epoch;
+    //write_log("Starting system... spp->epoch is now %"PRIu64"\n", spp->epoch);
     spp->max_age = (1 << TIME_PREC_BITS) - 1;
 
     ssd->death_time_list = g_malloc0(sizeof(struct death_time_track) * spp->tt_chunks);
@@ -585,6 +632,7 @@ void ssd_init(FemuCtrl *n)
     spp->enable_stream = n->enable_stream;
     spp->msl = n->msl;
     spp->enable_cascade_stream = n->enable_cascade_stream;
+    spp->access_interval_precision = n->access_interval_precision;
 
     /* initialize maptbl */
     ssd_init_maptbl(ssd);
@@ -956,6 +1004,9 @@ static int do_gc(struct ssd *ssd, bool force)
     ftl_debug("GC-ing line:%d,ipc=%d,victim=%d,full=%d,free=%d\n", ppa.g.blk,
               victim_line->ipc, ssd->lm.victim_line_cnt, ssd->lm.full_line_cnt,
               ssd->lm.free_line_cnt);
+    //write_log("GC-ing line:%d,ipc=%d,victim=%d,full=%d,free=%d\n", ppa.g.blk,
+              victim_line->ipc, ssd->lm.victim_line_cnt, ssd->lm.full_line_cnt,
+              ssd->lm.free_line_cnt);
 
     /* copy back valid data */
     for (ch = 0; ch < spp->nchs; ch++) {
@@ -1040,9 +1091,9 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
         
         // Also, dspec will decrease by 1 for other streams before being passed to the device.
         nvme_update_str_stat(n, ns, dspec);
-        //write_log("NVME_RW_DTYPE_STREAMS Got this for stream: %d\n", dspec);
+        ////write_log("NVME_RW_DTYPE_STREAMS Got this for stream: %d\n", dspec);
     }else{
-        //write_log("Stream not set: %d\n", dspec);
+        ////write_log("Stream not set: %d\n", dspec);
         dspec = 0;
     }
 
@@ -1062,9 +1113,9 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
     int i;
     int r;
 
-    write_log("++++Write start LPN: %"PRIu64", end LPN: %"PRIu64", given stream: %d, now start++++\n", start_lpn, end_lpn, dspec);
+    //write_log("++++Write start LPN: %"PRIu64", end LPN: %"PRIu64", given stream: %d, now start++++\n", start_lpn, end_lpn, dspec);
 
-    //write_log("%s, opcode:%#x, start_sec:%#lx, size:%#lx, streamenabled:%d, dspec:%#x\n", __func__, rw->opcode, start_lpn * ssd->sp.secs_per_pg, (end_lpn - start_lpn + 1) * ssd->sp.secsz * ssd->sp.secs_per_pg, stream, dspec);
+    ////write_log("%s, opcode:%#x, start_sec:%#lx, size:%#lx, streamenabled:%d, dspec:%#x\n", __func__, rw->opcode, start_lpn * ssd->sp.secs_per_pg, (end_lpn - start_lpn + 1) * ssd->sp.secsz * ssd->sp.secs_per_pg, stream, dspec);
 
     if (end_lpn >= spp->tt_pgs) {
         ftl_err("start_lpn=%"PRIu64",tt_pgs=%d\n", start_lpn, ssd->sp.tt_pgs);
@@ -1117,10 +1168,10 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
                 if (prediction > 0){
                     stream_choice = 0;
                 }
-                write_log("Addr: %"PRIu64", Chunk: %"PRIu64", Avg Life: %d, Assigned to stream: %d.\n", lpn, chunk, ssd->death_time_list[chunk].death_time_avg, stream_choice);
+                //write_log("Addr: %"PRIu64", Chunk: %"PRIu64", Avg Life: %d, Assigned to stream: %d.\n", lpn, chunk, ssd->death_time_list[chunk].death_time_avg, stream_choice);
             }else if(ssd->death_time_list[chunk].last_access_op == WRITE_ONCE_OP){
                 stream_choice = 0;
-                write_log("Addr: %"PRIu64", Chunk: %"PRIu64", First time written, no DT info, assigned to stream 0.\n", lpn, chunk);
+                //write_log("Addr: %"PRIu64", Chunk: %"PRIu64", First time written, no DT info, assigned to stream 0.\n", lpn, chunk);
             }
         }
 
@@ -1144,7 +1195,7 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
         curlat = ssd_advance_status(ssd, &ppa, &swr);
         maxlat = (curlat > maxlat) ? curlat : maxlat;
     }
-    write_log("----Write start LPN: %"PRIu64", end LPN: %"PRIu64", given stream: %d, now end----\n", start_lpn, end_lpn, dspec);
+    //write_log("----Write start LPN: %"PRIu64", end LPN: %"PRIu64", given stream: %d, now end----\n", start_lpn, end_lpn, dspec);
     return maxlat;
 }
 

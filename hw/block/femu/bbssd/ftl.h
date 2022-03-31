@@ -1,7 +1,7 @@
 #ifndef __FEMU_FTL_H
 #define __FEMU_FTL_H
 
-//#define FEMU_DEBUG_FTL
+#define FEMU_DEBUG_FTL
 
 #include "../nvme.h"
 
@@ -186,8 +186,10 @@ struct ssdparams {
     bool enable_stream;
     bool enable_cascade_stream;
     uint8_t msl;
-    uint64_t epoch;   /* current passed epoch since SSD started */
+    uint64_t epoch;   /* Last updated age */
+    uint64_t start_time; /* When the system started */
     uint64_t max_age;
+    uint32_t access_interval_precision;
 };
 
 typedef struct line {
@@ -215,7 +217,7 @@ struct stream_info {
     uint64_t age;
     uint64_t avg_full_interval;
     bool fulled_before;
-}
+};
 
 struct line_mgmt {
     struct line *lines;
@@ -296,6 +298,8 @@ struct ssd {
 
 void ssd_init(FemuCtrl *n);
 
+static uint64_t get_up_time(struct ssd *ssd);
+
 #ifdef FEMU_DEBUG_FTL
 #define ftl_debug(fmt, ...) \
     do { printf("[FEMU] FTL-Dbg: " fmt, ## __VA_ARGS__); } while (0)
@@ -313,7 +317,8 @@ void ssd_init(FemuCtrl *n);
 
 /* FEMU assert() */
 #ifdef FEMU_DEBUG_FTL
-#define ftl_assert(expression) assert(expression)
+#define ftl_assert(expression) \
+    do {fflush(NULL); assert(expression);} while (0)
 #else
 #define ftl_assert(expression)
 #endif
