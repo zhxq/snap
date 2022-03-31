@@ -383,7 +383,7 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream)
                             cur_si = &ssd->stream_info[i];
                             //write_log("Stream %d has max time %"PRIu64", full interval %"PRIu64"\n", i, cur_si->stream_max_time, cur_si->avg_full_interval);
                             
-                            if (passed_epoch_since_start + prev_si->avg_full_interval <= cur_si->stream_min_time && passed_epoch_since_start + prev_si->avg_full_interval >= cur_si->stream_max_time){
+                            if (passed_epoch_since_start + prev_si->avg_full_interval >= cur_si->stream_max_time){
                                 prev_si->stream_max_time = cur_si->stream_max_time;
                                 ssd->wp[i - 1] = ssd->wp[i];
                                 last_rotated = i;

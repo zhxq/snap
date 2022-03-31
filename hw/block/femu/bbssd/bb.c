@@ -70,7 +70,7 @@ static void bb_flip(FemuCtrl *n, NvmeCmd *cmd)
         break;
     case FEMU_SHOW_WA_INFO:
         //femu_log("From Host: %"PRIu64", From GC: %"PRIu64"\n", n->ssd->pages_from_host, n->ssd->pages_from_gc);
-        sprintf(buffer, "{\"host\": %"PRIu64", \"gc\": %"PRIu64", \"uptime\": %"PRIu64"}", n->ssd->pages_from_host, n->ssd->pages_from_gc, get_uptime(ssd));
+        sprintf(buffer, "{\"host\": %"PRIu64", \"gc\": %"PRIu64", \"uptime\": %"PRIu64"}", ssd->pages_from_host, ssd->pages_from_gc, get_uptime(ssd));
         dma_read_prp(n, (uint8_t *)buffer, sizeof(buffer), prp1, prp2);
         break;
     case FEMU_LOG_FLUSH:
