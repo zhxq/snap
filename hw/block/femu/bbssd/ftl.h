@@ -182,9 +182,11 @@ struct ssdparams {
 
     int tt_chunks;    /* total # of chunks in the SSD */
 
+    int pages_per_superblock;
+
     bool death_time_prediction; /* Death Time Prediction Enabled */
     bool enable_stream;
-    bool enable_cascade_stream;
+    bool enable_stream_redirect;
     uint8_t msl;
     uint64_t epoch;   /* Last updated age */
     uint64_t start_time; /* When the system started */
@@ -212,11 +214,14 @@ struct write_pointer {
 };
 
 struct stream_info {
-    uint64_t stream_min_time;
-    uint64_t stream_max_time;
-    uint64_t age;
-    uint64_t avg_full_interval;
+    uint64_t earliest_death_time;
+    uint64_t latest_death_time;
+    double avg_incoming_interval;
+    uint64_t block_start_time;
+    uint64_t page_counter;
     bool fulled_before;
+    bool sender;
+    bool receiver;
 };
 
 struct line_mgmt {

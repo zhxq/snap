@@ -1377,7 +1377,7 @@ typedef struct FemuCtrl {
     uint32_t        pages_per_chunk;
     uint32_t        access_interval_precision;
     bool            enable_hashing;
-    bool            enable_cascade_stream;
+    bool            enable_stream_redirect;
 } FemuCtrl;
 
 typedef struct NvmePollerThreadArgument {

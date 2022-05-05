@@ -687,7 +687,7 @@ static Property femu_props[] = {
     DEFINE_PROP_UINT32("pages_per_chunk", FemuCtrl, pages_per_chunk, 128),
     DEFINE_PROP_UINT32("access_interval_precision", FemuCtrl, access_interval_precision, 32),
     DEFINE_PROP_BOOL("hashing_support", FemuCtrl, enable_hashing, false),
-    DEFINE_PROP_BOOL("cascade_stream", FemuCtrl, enable_cascade_stream, true),
+    DEFINE_PROP_BOOL("cascade_stream", FemuCtrl, enable_stream_redirect, true),
     DEFINE_PROP_END_OF_LIST(),
 };
 
