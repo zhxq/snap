@@ -255,7 +255,6 @@ static void ssd_init_write_pointer(struct ssd *ssd, uint8_t streams)
     struct stream_info *si = NULL;
     struct line_mgmt *lm = &ssd->lm;
     struct line *curline = NULL;
-    uint64_t passed_epoch_since_start = get_passed_epoch_since_start(ssd);
     for (int i = 0; i <= streams; i++){
         curline = QTAILQ_FIRST(&lm->free_line_list);
         QTAILQ_REMOVE(&lm->free_line_list, curline, entry);
@@ -303,15 +302,12 @@ static struct line *get_next_free_line(struct ssd *ssd)
 
 static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream)
 {
-    int i = 0;
     struct ssdparams *spp = &ssd->sp;
     struct write_pointer *wpp = &ssd->wp[stream];
     struct stream_info *si = &ssd->stream_info[stream];
     si->page_counter++;
     uint64_t uptime = get_uptime(ssd);
-    struct write_pointer swap;
     struct line_mgmt *lm = &ssd->lm;
-    int last_rotated = -1;
     check_addr(wpp->ch, spp->nchs);
     wpp->ch++;
     if (wpp->ch == spp->nchs) {
@@ -360,11 +356,11 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream)
                 write_log("+++++\n\n");
                 write_log("Stream %d curblock is full: \n", stream);
                 write_log("Avg incoming interval: %.6fs\n", si->avg_incoming_interval);
-                write_log("Block open time: %ds\n", si->block_start_time);
-                write_log("Block close time: %ds\n", uptime);
-                write_log("Block earliest DT: %d units\n", si->earliest_death_time);
-                write_log("Block latest DT: %d units\n", si->latest_death_time);
-                write_log("Transient time: %d units\n", si->latest_death_time - max(get_passed_epoch_since_start(ssd), si->earliest_death_time));
+                write_log("Block open time: %"PRIu64"s\n", si->block_start_time);
+                write_log("Block close time: %"PRIu64"s\n", uptime);
+                write_log("Block earliest DT: %"PRIu64" units\n", si->earliest_death_time);
+                write_log("Block latest DT: %"PRIu64" units\n", si->latest_death_time);
+                write_log("Transient time: %"PRIu64" units\n", si->latest_death_time - (get_passed_epoch_since_start(ssd) > si->earliest_death_time ? get_passed_epoch_since_start(ssd) : si->earliest_death_time));
                 write_log("-----\n\n");
                 si->sender = false;
                 si->receiver = false;
@@ -1132,9 +1128,9 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
                 if (prediction > 0){
                     stream_choice = 0;
                 }
+                si = &ssd->stream_info[stream_choice];
                 if (spp->enable_stream_redirect){
                     prediction = ssd->death_time_list[chunk].death_time_avg;
-                    si = &ssd->stream_info[stream];
                     if (stream_choice > 0 && si->receiver == false){
                         // Check if there is another write pointer we can redirect this page to
                         // Also, if this stream has received something from some other stream, then we don't redirect anything from this stream to other streams
@@ -1150,7 +1146,7 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
                                 // The target must have L > (P - 1) * V_i, goes here
                                 if (page_death_time >= si->earliest_death_time && page_death_time <= si->latest_death_time){
                                     // Redirect
-                                    write_log("Page lifetime prediction: %d, deathtime prediction: %d,\nredirected from stream %d (T_e = %"PRIu64", T_l = %"PRIu64", T_o = %"PRIu64") to %d (T_e = %"PRIu64", T_l = %"PRIu64", T_o = %"PRIu64").\n\n", prediction, page_death_time, stream_choice, si->earliest_death_time, si->latest_death_time, si->block_start_time, i, cmp_si->earliest_death_time, cmp_si->latest_death_time, cmp_si->block_start_time);
+                                    write_log("Page lifetime prediction: %"PRIu64", deathtime prediction: %"PRIu64",\nredirected from stream %d (T_e = %"PRIu64", T_l = %"PRIu64", T_o = %"PRIu64") to %d (T_e = %"PRIu64", T_l = %"PRIu64", T_o = %"PRIu64").\n\n", prediction, page_death_time, stream_choice, si->earliest_death_time, si->latest_death_time, si->block_start_time, i, cmp_si->earliest_death_time, cmp_si->latest_death_time, cmp_si->block_start_time);
                                     stream_choice = i;
                                     si->sender = true;
                                     cmp_si->receiver = true;
@@ -1167,7 +1163,7 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
                 //write_log("Addr: %"PRIu64", Chunk: %"PRIu64", First time written, no DT info, assigned to stream 0.\n", lpn, chunk);
             }
         }
-
+        si = &ssd->stream_info[stream_choice];
         // Change the write pointer earliest/latest death time
         if (page_death_time < si->earliest_death_time || si->page_counter == 0){
             si->earliest_death_time = page_death_time;
