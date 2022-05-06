@@ -345,7 +345,7 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream)
                         si->avg_incoming_interval = si->avg_incoming_interval * (1 - DECAY) + ((uptime - si->block_start_time) / spp->pages_per_superblock) * DECAY;
                     }else{
                         //write_log("Stream %d first full\n", stream);
-                        si->avg_incoming_interval = (uptime - si->block_start_time / spp->pages_per_superblock);
+                        si->avg_incoming_interval = ((uptime - si->block_start_time) / spp->pages_per_superblock);
                         //write_log("Stream %d new avg full interval: %"PRIu64"\n", stream, si->avg_incoming_interval);
                         si->fulled_before = true;
                     }
