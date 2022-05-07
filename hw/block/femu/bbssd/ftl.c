@@ -9,6 +9,16 @@ FILE * femu_log_file;
     do { } while (0)
 #endif
 
+ #define max(a,b) \
+   ({ __typeof__ (a) _a = (a); \
+       __typeof__ (b) _b = (b); \
+     _a > _b ? _a : _b; })
+
+#define min(a,b) \
+   ({ __typeof__ (a) _a = (a); \
+       __typeof__ (b) _b = (b); \
+     _a < _b ? _a : _b; })
+
 static void *ftl_thread(void *arg);
 
 static inline bool should_gc(struct ssd *ssd)
@@ -355,12 +365,15 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream)
                 }
                 write_log("+++++\n\n");
                 write_log("Stream %d curblock is full: \n", stream);
-                write_log("Avg incoming interval: %.6fs\n", si->avg_incoming_interval);
+                write_log("Avg incoming interval: %.20fs\n", si->avg_incoming_interval);
                 write_log("Block open time: %"PRIu64"s\n", si->block_start_time);
                 write_log("Block close time: %"PRIu64"s\n", uptime);
                 write_log("Block earliest DT: %"PRIu64" units\n", si->earliest_death_time);
                 write_log("Block latest DT: %"PRIu64" units\n", si->latest_death_time);
-                write_log("Transient time: %"PRIu64" units\n", si->latest_death_time - (get_passed_epoch_since_start(ssd) > si->earliest_death_time ? get_passed_epoch_since_start(ssd) : si->earliest_death_time));
+                write_log("Current epoch since start: %"PRIu64" units\n", get_passed_epoch_since_start(ssd));
+                write_log("Transient time starts from: %"PRIu64" units\n", max(get_passed_epoch_since_start(ssd), si->earliest_death_time));
+                write_log("Transient time ends at: %"PRIu64" units\n", si->latest_death_time);
+                write_log("Transient time: %"PRIu64" units\n", si->latest_death_time - max(get_passed_epoch_since_start(ssd), si->earliest_death_time));
                 write_log("-----\n\n");
                 si->sender = false;
                 si->receiver = false;
@@ -1131,22 +1144,22 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
                 si = &ssd->stream_info[stream_choice];
                 if (spp->enable_stream_redirect){
                     prediction = ssd->death_time_list[chunk].death_time_avg;
-                    if (stream_choice > 0 && si->receiver == false){
+                    if (stream_choice > 0){
                         // Check if there is another write pointer we can redirect this page to
                         // Also, if this stream has received something from some other stream, then we don't redirect anything from this stream to other streams
                         // AKA receiver should not send redirects
                         for (i = 1; i <= spp->msl; i++){
-                            cmp_si = &ssd->stream_info[i];
-                            // Sender should not receive
-                            if (cmp_si->sender){
+                            if (i == stream_choice){
                                 continue;
                             }
+                            cmp_si = &ssd->stream_info[i];
                             // Check if L > (P - 1) * V_i
+                            // if (true){
                             if ((pow(2, i) - 1) * spp->access_interval_precision > (spp->pages_per_superblock - 1) * cmp_si->avg_incoming_interval){
                                 // The target must have L > (P - 1) * V_i, goes here
-                                if (page_death_time >= si->earliest_death_time && page_death_time <= si->latest_death_time){
+                                if (page_death_time >= cmp_si->earliest_death_time && page_death_time <= cmp_si->latest_death_time){
                                     // Redirect
-                                    write_log("Page lifetime prediction: %"PRIu64", deathtime prediction: %"PRIu64",\nredirected from stream %d (T_e = %"PRIu64", T_l = %"PRIu64", T_o = %"PRIu64") to %d (T_e = %"PRIu64", T_l = %"PRIu64", T_o = %"PRIu64").\n\n", prediction, page_death_time, stream_choice, si->earliest_death_time, si->latest_death_time, si->block_start_time, i, cmp_si->earliest_death_time, cmp_si->latest_death_time, cmp_si->block_start_time);
+                                    write_log("Current time: %"PRIu64", Page lifetime prediction: %"PRIu64", deathtime prediction: %"PRIu64",\nredirected from stream %d (T_e = %"PRIu64", T_l = %"PRIu64", T_o = %"PRIu64") to %d (T_e = %"PRIu64", T_l = %"PRIu64", T_o = %"PRIu64").\n\n", passed_epoch_since_start, prediction, page_death_time, stream_choice, si->earliest_death_time, si->latest_death_time, si->block_start_time, i, cmp_si->earliest_death_time, cmp_si->latest_death_time, cmp_si->block_start_time);
                                     stream_choice = i;
                                     si->sender = true;
                                     cmp_si->receiver = true;
