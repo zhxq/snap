@@ -352,7 +352,7 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream)
                 if (spp->enable_stream_redirect && spp->death_time_prediction){
                     //write_log("Stream %d block is full.\n", stream);
                     if (si->fulled_before){
-                        si->avg_incoming_interval = si->avg_incoming_interval * (1 - DECAY) + ((uptime - si->block_start_time) / spp->pages_per_superblock) * DECAY;
+                        si->avg_incoming_interval = si->avg_incoming_interval * (double)(1 - DECAY) + ((double)(uptime - si->block_start_time) / (double)(spp->pages_per_superblock)) * (double)DECAY;
                     }else{
                         //write_log("Stream %d first full\n", stream);
                         si->avg_incoming_interval = ((uptime - si->block_start_time) / spp->pages_per_superblock);
