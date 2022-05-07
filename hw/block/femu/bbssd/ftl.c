@@ -1155,7 +1155,7 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
                             cmp_si = &ssd->stream_info[i];
                             // Check if L > (P - 1) * V_i
                             // if (true){
-                            if ((pow(2, i) - 1) * spp->access_interval_precision > (spp->pages_per_superblock - 1) * cmp_si->avg_incoming_interval){
+                            if ((pow(2, i - 1)) * spp->access_interval_precision > (spp->pages_per_superblock - 1) * cmp_si->avg_incoming_interval){
                                 // The target must have L > (P - 1) * V_i, goes here
                                 if (page_death_time >= cmp_si->earliest_death_time && page_death_time <= cmp_si->latest_death_time){
                                     // Redirect
