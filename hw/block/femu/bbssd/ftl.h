@@ -214,14 +214,19 @@ struct write_pointer {
 };
 
 struct stream_info {
+    // The following entries are defined for outgoing block
     uint64_t earliest_death_time;
     uint64_t latest_death_time;
-    double avg_incoming_interval;
-    uint64_t block_start_time;
-    uint64_t page_counter;
-    bool fulled_before;
+    uint64_t block_open_time;
     bool sender;
     bool receiver;
+
+
+    // The following entries are defined for the incoming stream
+    bool full_before;
+    double avg_incoming_interval;
+    uint64_t stream_counter_start_time;
+    uint64_t page_counter;
 };
 
 struct line_mgmt {

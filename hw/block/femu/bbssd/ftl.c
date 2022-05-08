@@ -281,8 +281,9 @@ static void ssd_init_write_pointer(struct ssd *ssd, uint8_t streams)
         si->earliest_death_time = 0;
         si->latest_death_time = 0;
         si->avg_incoming_interval = 0;
-        si->block_start_time = get_uptime(ssd);
-        si->fulled_before = false;
+        si->block_open_time = get_uptime(ssd);
+        si->stream_counter_start_time = get_uptime(ssd);
+        si->full_before = false;
         si->sender = false;
         si->receiver = false;
         si->page_counter = 0;
@@ -315,7 +316,6 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream)
     struct ssdparams *spp = &ssd->sp;
     struct write_pointer *wpp = &ssd->wp[stream];
     struct stream_info *si = &ssd->stream_info[stream];
-    si->page_counter++;
     uint64_t uptime = get_uptime(ssd);
     struct line_mgmt *lm = &ssd->lm;
     check_addr(wpp->ch, spp->nchs);
@@ -349,24 +349,15 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream)
 
                 // DZ Start
 
-                if (spp->enable_stream_redirect && spp->death_time_prediction){
-                    //write_log("Stream %d block is full.\n", stream);
-                    if (si->fulled_before){
-                        si->avg_incoming_interval = si->avg_incoming_interval * (double)(1 - DECAY) + ((double)(uptime - si->block_start_time) / (double)(spp->pages_per_superblock)) * (double)DECAY;
-                    }else{
-                        //write_log("Stream %d first full\n", stream);
-                        si->avg_incoming_interval = ((uptime - si->block_start_time) / spp->pages_per_superblock);
-                        //write_log("Stream %d new avg full interval: %"PRIu64"\n", stream, si->avg_incoming_interval);
-                        si->fulled_before = true;
-                    }
-                    
-                }else{
-                    // Prediction not used. Just skip rotation.
-                }
+                
+                // TODO: Remember to separate the incoming streams and write pointer stream information!!!!
+                // Incoming streams can be separated by their predicted lifetime (use a new data struct!)
+                // Stream Info for blocks should remember its T_o, T_e and T_l
+
                 write_log("+++++\n\n");
                 write_log("Stream %d curblock is full: \n", stream);
                 write_log("Avg incoming interval: %.20fs\n", si->avg_incoming_interval);
-                write_log("Block open time: %"PRIu64"s\n", si->block_start_time);
+                write_log("Block open time: %"PRIu64"s\n", si->block_open_time);
                 write_log("Block close time: %"PRIu64"s\n", uptime);
                 write_log("Block earliest DT: %"PRIu64" units\n", si->earliest_death_time);
                 write_log("Block latest DT: %"PRIu64" units\n", si->latest_death_time);
@@ -377,11 +368,9 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream)
                 write_log("-----\n\n");
                 si->sender = false;
                 si->receiver = false;
-                si->block_start_time = uptime;
+                si->block_open_time = uptime;
                 si->earliest_death_time = 0;
                 si->latest_death_time = 0;
-                ftl_assert(si->page_counter == spp->pages_per_superblock);
-                si->page_counter = 0;
 
                 check_addr(wpp->blk, spp->blks_per_pl);
                 wpp->curline = NULL;
@@ -1051,6 +1040,7 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
     bool stream = control & NVME_RW_DTYPE_STREAMS;
     uint64_t page_death_time = 0;
     uint64_t passed_epoch_since_start = get_passed_epoch_since_start(ssd);
+    uint64_t uptime = get_uptime(ssd);
     struct stream_info *si;
     struct stream_info *cmp_si;
     uint16_t dspec = (dsmgmt >> 16) & 0xFFFF; //Stream ID
@@ -1148,22 +1138,44 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
                         // Check if there is another write pointer we can redirect this page to
                         // Also, if this stream has received something from some other stream, then we don't redirect anything from this stream to other streams
                         // AKA receiver should not send redirects
-                        for (i = 1; i <= spp->msl; i++){
-                            if (i == stream_choice){
-                                continue;
+                        si->page_counter++;
+                        if (si->page_counter == spp->pages_per_superblock){
+                            write_log("\n\n=-=-=\n");
+                            write_log("Update stream incoming interval: \n");
+                            write_log("Old interval: %.15f\n", si->avg_incoming_interval);
+                            write_log("Passed time: %"PRIu64"\n", (uptime - si->stream_counter_start_time));
+                            if (si->full_before){
+                                si->avg_incoming_interval = si->avg_incoming_interval * (double)(1 - DECAY) + ((double)(uptime - si->stream_counter_start_time) / (double)(si->page_counter)) * (double)DECAY;
+                            }else{
+                                //write_log("Stream %d first full\n", stream);
+                                si->avg_incoming_interval = ((uptime - si->stream_counter_start_time) / si->page_counter);
+                                //write_log("Stream %d new avg full interval: %"PRIu64"\n", stream, si->avg_incoming_interval);
+                                si->full_before = true;
                             }
-                            cmp_si = &ssd->stream_info[i];
-                            // Check if L > (P - 1) * V_i
-                            // if (true){
-                            if ((pow(2, i - 1)) * spp->access_interval_precision > (spp->pages_per_superblock - 1) * cmp_si->avg_incoming_interval){
-                                // The target must have L > (P - 1) * V_i, goes here
-                                if (page_death_time >= cmp_si->earliest_death_time && page_death_time <= cmp_si->latest_death_time){
-                                    // Redirect
-                                    write_log("Current time: %"PRIu64", Page lifetime prediction: %"PRIu64", deathtime prediction: %"PRIu64",\nredirected from stream %d (T_e = %"PRIu64", T_l = %"PRIu64", T_o = %"PRIu64") to %d (T_e = %"PRIu64", T_l = %"PRIu64", T_o = %"PRIu64").\n\n", passed_epoch_since_start, prediction, page_death_time, stream_choice, si->earliest_death_time, si->latest_death_time, si->block_start_time, i, cmp_si->earliest_death_time, cmp_si->latest_death_time, cmp_si->block_start_time);
-                                    stream_choice = i;
-                                    si->sender = true;
-                                    cmp_si->receiver = true;
-                                    break;
+                            write_log("New interval: %.15f\n", si->avg_incoming_interval);
+                            write_log("=+=+=\n\n");
+                            si->page_counter = 0;
+                            si->stream_counter_start_time = uptime;
+                        }
+                        if (si->full_before){
+                            // Only redirect if we have previous interval info about this incoming stream
+                            for (i = 1; i <= spp->msl; i++){
+                                if (i == stream_choice){
+                                    continue;
+                                }
+                                cmp_si = &ssd->stream_info[i];
+                                // Check if L > (P - 1) * V_i
+                                // if (true){
+                                if ((pow(2, i - 1)) * spp->access_interval_precision > (spp->pages_per_superblock - 1) * cmp_si->avg_incoming_interval){
+                                    // The target must have L > (P - 1) * V_i, goes here
+                                    if (page_death_time >= cmp_si->earliest_death_time && page_death_time <= cmp_si->latest_death_time){
+                                        // Redirect
+                                        write_log("Current time: %"PRIu64", Page lifetime prediction: %"PRIu64", deathtime prediction: %"PRIu64",\nredirected from stream %d (T_e = %"PRIu64", T_l = %"PRIu64", T_o = %"PRIu64") to %d (T_e = %"PRIu64", T_l = %"PRIu64", T_o = %"PRIu64").\n\n", passed_epoch_since_start, prediction, page_death_time, stream_choice, si->earliest_death_time, si->latest_death_time, si->stream_counter_start_time, i, cmp_si->earliest_death_time, cmp_si->latest_death_time, cmp_si->stream_counter_start_time);
+                                        stream_choice = i;
+                                        si->sender = true;
+                                        cmp_si->receiver = true;
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -1177,7 +1189,7 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
             }
         }
         si = &ssd->stream_info[stream_choice];
-        // Change the write pointer earliest/latest death time
+        // Update the write pointer earliest/latest death time for the target block
         if (page_death_time < si->earliest_death_time || si->page_counter == 0){
             si->earliest_death_time = page_death_time;
         }
