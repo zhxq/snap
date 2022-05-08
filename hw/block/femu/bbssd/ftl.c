@@ -278,7 +278,7 @@ static void ssd_init_write_pointer(struct ssd *ssd, uint8_t streams)
         wpp->pg = 0;
         wpp->blk = i;
         wpp->pl = 0;
-        si->earliest_death_time = 0;
+        si->earliest_death_time = -1; // Overflow on purpose. Max uint64_t.
         si->latest_death_time = 0;
         si->avg_incoming_interval = 0;
         si->block_open_time = get_uptime(ssd);
@@ -369,7 +369,7 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream)
                 si->sender = false;
                 si->receiver = false;
                 si->block_open_time = uptime;
-                si->earliest_death_time = 0;
+                si->earliest_death_time = -1; // Max uint64_t
                 si->latest_death_time = 0;
 
                 check_addr(wpp->blk, spp->blks_per_pl);
@@ -1190,7 +1190,7 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
         }
         si = &ssd->stream_info[stream_choice];
         // Update the write pointer earliest/latest death time for the target block
-        if (page_death_time < si->earliest_death_time || si->page_counter == 0){
+        if (page_death_time < si->earliest_death_time){
             si->earliest_death_time = page_death_time;
         }
         if (page_death_time > si->latest_death_time){
