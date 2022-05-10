@@ -1141,7 +1141,7 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
                         si->page_counter++;
                         if (si->page_counter == spp->pages_per_superblock){
                             write_log("\n\n=-=-=\n");
-                            write_log("Update stream incoming interval: \n");
+                            write_log("Update stream %d incoming interval: \n", stream_choice);
                             write_log("Old interval: %.15f\n", si->avg_incoming_interval);
                             write_log("Passed time: %"PRIu64"\n", (uptime - si->stream_counter_start_time));
                             if (si->full_before){
@@ -1157,13 +1157,13 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
                             si->page_counter = 0;
                             si->stream_counter_start_time = uptime;
                         }
-                        if (si->full_before){
+                        if (si->full_before && si->receiver == false){
                             // Only redirect if we have previous interval info about this incoming stream
                             for (i = 1; i <= spp->msl; i++){
-                                if (i == stream_choice){
+                                cmp_si = &ssd->stream_info[i];
+                                if (i == stream_choice || cmp_si->sender){
                                     continue;
                                 }
-                                cmp_si = &ssd->stream_info[i];
                                 // Check if L > (P - 1) * V_i
                                 // if (true){
                                 if ((pow(2, i - 1)) * spp->access_interval_precision > (spp->pages_per_superblock - 1) * cmp_si->avg_incoming_interval){
