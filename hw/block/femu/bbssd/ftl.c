@@ -311,7 +311,7 @@ static struct line *get_next_free_line(struct ssd *ssd)
     return curline;
 }
 
-static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream)
+static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream, uint64_t lpn)
 {
     struct ssdparams *spp = &ssd->sp;
     struct write_pointer *wpp = &ssd->wp[stream];
@@ -353,7 +353,7 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream)
                 // TODO: Remember to separate the incoming streams and write pointer stream information!!!!
                 // Incoming streams can be separated by their predicted lifetime (use a new data struct!)
                 // Stream Info for blocks should remember its T_o, T_e and T_l
-
+                /*
                 write_log("+++++\n\n");
                 write_log("Stream %d curblock is full: \n", stream);
                 write_log("Avg incoming interval: %.20fs\n", si->avg_incoming_interval);
@@ -366,6 +366,7 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream)
                 write_log("Transient time ends at: %"PRIu64" units\n", si->latest_death_time);
                 write_log("Transient time: %"PRIu64" units\n", si->latest_death_time - max(get_passed_epoch_since_start(ssd), si->earliest_death_time));
                 write_log("-----\n\n");
+                */
                 si->sender = false;
                 si->receiver = false;
                 si->block_open_time = uptime;
@@ -375,6 +376,9 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream)
                 check_addr(wpp->blk, spp->blks_per_pl);
                 wpp->curline = NULL;
                 wpp->curline = get_next_free_line(ssd);
+                ftl_debug("Stream %d now has line %d,victim=%d,full=%d,free=%d,lpn=%"PRIu64",hostpgs=%"PRIu64",gcpgs=%"PRIu64"\n", stream, wpp->curline->id,
+                    ssd->lm.victim_line_cnt, ssd->lm.full_line_cnt,
+                    ssd->lm.free_line_cnt, lpn, ssd->pages_from_host, ssd->pages_from_gc);
                 if (!wpp->curline) {
                     /* TODO */
                     abort();
@@ -867,7 +871,7 @@ static uint64_t gc_write_page(struct ssd *ssd, struct ppa *old_ppa)
     mark_page_valid(ssd, &new_ppa);
 
     /* need to advance the write pointer here */
-    ssd_advance_write_pointer(ssd, 0);
+    ssd_advance_write_pointer(ssd, 0, lpn);
 
     if (ssd->sp.enable_gc_delay) {
         struct nand_cmd gcw;
@@ -961,9 +965,9 @@ static int do_gc(struct ssd *ssd, bool force)
     }
 
     ppa.g.blk = victim_line->id;
-    ftl_debug("GC-ing line:%d,ipc=%d,victim=%d,full=%d,free=%d\n", ppa.g.blk,
+    ftl_debug("GC-ing line:%d,ipc=%d,victim=%d,full=%d,free=%d,hostpgs=%"PRIu64",gcpgs=%"PRIu64"\n", ppa.g.blk,
               victim_line->ipc, ssd->lm.victim_line_cnt, ssd->lm.full_line_cnt,
-              ssd->lm.free_line_cnt);
+              ssd->lm.free_line_cnt, ssd->pages_from_host, ssd->pages_from_gc);
     //write_log("GC-ing line:%d,ipc=%d,victim=%d,full=%d,free=%d\n", ppa.g.blk, victim_line->ipc, ssd->lm.victim_line_cnt, ssd->lm.full_line_cnt, ssd->lm.free_line_cnt);
 
     /* copy back valid data */
@@ -1072,7 +1076,12 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
     uint64_t curlat = 0, maxlat = 0;
     uint64_t chunk;
     uint64_t prediction;
+
+    uint64_t prev_starter = start_lpn;
     int stream_choice = 0;
+    int last_step_stream_choice = -1;
+    int old_stream_choice = 0;
+    int last_step_old_stream_choice = -1;
     int i;
     int r;
 
@@ -1108,8 +1117,10 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
         
         if (dspec > 0){
             stream_choice = dspec;
+            old_stream_choice = dspec;
         }else if (spp->death_time_prediction){
             stream_choice = 0;
+            old_stream_choice = 0;
             chunk = lpn_to_chunk(lpn, n->pages_per_chunk);
             if (ssd->death_time_list[chunk].last_access_op != INITIAL_OP && ssd->death_time_list[chunk].last_access_op != WRITE_ONCE_OP){
                 prediction = ssd->death_time_list[chunk].death_time_avg;
@@ -1131,6 +1142,7 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
                 if (prediction > 0){
                     stream_choice = 0;
                 }
+                old_stream_choice = stream_choice;
                 si = &ssd->stream_info[stream_choice];
                 if (spp->enable_stream_redirect){
                     prediction = ssd->death_time_list[chunk].death_time_avg;
@@ -1140,10 +1152,12 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
                         // AKA receiver should not send redirects
                         si->page_counter++;
                         if (si->page_counter == spp->pages_per_superblock){
+                            /*
                             write_log("\n\n=-=-=\n");
                             write_log("Update stream %d incoming interval: \n", stream_choice);
                             write_log("Old interval: %.15f\n", si->avg_incoming_interval);
                             write_log("Passed time: %"PRIu64"\n", (uptime - si->stream_counter_start_time));
+                            */
                             if (si->full_before){
                                 si->avg_incoming_interval = si->avg_incoming_interval * (double)(1 - DECAY) + ((double)(uptime - si->stream_counter_start_time) / (double)(si->page_counter)) * (double)DECAY;
                             }else{
@@ -1152,8 +1166,10 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
                                 //write_log("Stream %d new avg full interval: %"PRIu64"\n", stream, si->avg_incoming_interval);
                                 si->full_before = true;
                             }
+                            /*
                             write_log("New interval: %.15f\n", si->avg_incoming_interval);
                             write_log("=+=+=\n\n");
+                            */
                             si->page_counter = 0;
                             si->stream_counter_start_time = uptime;
                         }
@@ -1170,7 +1186,7 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
                                     // The target must have L > (P - 1) * V_i, goes here
                                     if (page_death_time >= cmp_si->earliest_death_time && page_death_time <= cmp_si->latest_death_time){
                                         // Redirect
-                                        write_log("Current time: %"PRIu64", Page lifetime prediction: %"PRIu64", deathtime prediction: %"PRIu64",\nredirected from stream %d (T_e = %"PRIu64", T_l = %"PRIu64", T_o = %"PRIu64") to %d (T_e = %"PRIu64", T_l = %"PRIu64", T_o = %"PRIu64").\n\n", passed_epoch_since_start, prediction, page_death_time, stream_choice, si->earliest_death_time, si->latest_death_time, si->stream_counter_start_time, i, cmp_si->earliest_death_time, cmp_si->latest_death_time, cmp_si->stream_counter_start_time);
+                                        // write_log("Current time: %"PRIu64", Page lifetime prediction: %"PRIu64", deathtime prediction: %"PRIu64",\nredirected from stream %d (T_e = %"PRIu64", T_l = %"PRIu64", T_o = %"PRIu64") to %d (T_e = %"PRIu64", T_l = %"PRIu64", T_o = %"PRIu64").\n\n", passed_epoch_since_start, prediction, page_death_time, stream_choice, si->earliest_death_time, si->latest_death_time, si->stream_counter_start_time, i, cmp_si->earliest_death_time, cmp_si->latest_death_time, cmp_si->stream_counter_start_time);
                                         stream_choice = i;
                                         si->sender = true;
                                         cmp_si->receiver = true;
@@ -1185,9 +1201,23 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
                 //write_log("Addr: %"PRIu64", Chunk: %"PRIu64", Avg Life: %d, Assigned to stream: %d.\n", lpn, chunk, ssd->death_time_list[chunk].death_time_avg, stream_choice);
             }else if(ssd->death_time_list[chunk].last_access_op == WRITE_ONCE_OP){
                 stream_choice = 0;
+                old_stream_choice = 0;
                 //write_log("Addr: %"PRIu64", Chunk: %"PRIu64", First time written, no DT info, assigned to stream 0.\n", lpn, chunk);
             }
         }
+
+        if (lpn == start_lpn){
+            last_step_stream_choice = stream_choice;
+            last_step_old_stream_choice = old_stream_choice;
+        }
+
+        if (stream_choice != last_step_stream_choice || old_stream_choice != last_step_old_stream_choice){
+            write_log("[1, %"PRIu64", %"PRIu64", %d, %d, 0]\n", prev_starter, lpn - 1, last_step_old_stream_choice, last_step_stream_choice);
+            prev_starter = lpn;
+        }
+        
+        last_step_stream_choice = stream_choice;
+        last_step_old_stream_choice = old_stream_choice;
         si = &ssd->stream_info[stream_choice];
         // Update the write pointer earliest/latest death time for the target block
         if (page_death_time < si->earliest_death_time){
@@ -1207,7 +1237,7 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
         mark_page_valid(ssd, &ppa);
 
         /* need to advance the write pointer here */
-        ssd_advance_write_pointer(ssd, stream_choice);
+        ssd_advance_write_pointer(ssd, stream_choice, lpn);
 
         struct nand_cmd swr;
         swr.type = USER_IO;
@@ -1217,6 +1247,7 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
         curlat = ssd_advance_status(ssd, &ppa, &swr);
         maxlat = (curlat > maxlat) ? curlat : maxlat;
     }
+    write_log("[1, %"PRIu64", %"PRIu64", %d, %d, 1]\n", prev_starter, end_lpn, old_stream_choice, stream_choice);
     //write_log("----Write start LPN: %"PRIu64", end LPN: %"PRIu64", given stream: %d, now end----\n", start_lpn, end_lpn, dspec);
     return maxlat;
 }
@@ -1248,6 +1279,7 @@ static void ssd_dsm(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req){
 
             start_lpn = lba / spp->secs_per_pg;
             end_lpn = (lba + len - 1) / spp->secs_per_pg;
+            write_log("[2, %"PRIu64", %"PRIu64"]\n", start_lpn, end_lpn);
             if (end_lpn >= spp->tt_pgs) {
                 ftl_err("start_lpn=%"PRIu64",tt_pgs=%d\n", start_lpn, ssd->sp.tt_pgs);
             }
