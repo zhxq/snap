@@ -1152,37 +1152,39 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
                         // AKA receiver should not send redirects
                         si->page_counter++;
                         if (si->page_counter == spp->pages_per_superblock){
-                            /*
+                            
                             write_log("\n\n=-=-=\n");
                             write_log("Update stream %d incoming interval: \n", stream_choice);
                             write_log("Old interval: %.15f\n", si->avg_incoming_interval);
                             write_log("Passed time: %"PRIu64"\n", (uptime - si->stream_counter_start_time));
-                            */
+                            
                             if (si->full_before){
                                 si->avg_incoming_interval = si->avg_incoming_interval * (double)(1 - DECAY) + ((double)(uptime - si->stream_counter_start_time) / (double)(si->page_counter)) * (double)DECAY;
                             }else{
-                                //write_log("Stream %d first full\n", stream);
-                                si->avg_incoming_interval = ((uptime - si->stream_counter_start_time) / si->page_counter);
+                                write_log("Stream %d first full\n", stream_choice);
+                                si->avg_incoming_interval = ((double)(uptime - si->stream_counter_start_time) / (double)(si->page_counter));
                                 //write_log("Stream %d new avg full interval: %"PRIu64"\n", stream, si->avg_incoming_interval);
                                 si->full_before = true;
                             }
-                            /*
+                            
                             write_log("New interval: %.15f\n", si->avg_incoming_interval);
                             write_log("=+=+=\n\n");
-                            */
+                            
                             si->page_counter = 0;
                             si->stream_counter_start_time = uptime;
                         }
-                        if (si->full_before && si->receiver == false){
+                        if (si->full_before && si->receiver == false && (pow(2, stream_choice - 1)) * spp->access_interval_precision < (spp->pages_per_superblock - 1) * si->avg_incoming_interval){
                             // Only redirect if we have previous interval info about this incoming stream
-                            for (i = 1; i <= spp->msl; i++){
+                            for (i = 2; i <= spp->msl; i++){
                                 cmp_si = &ssd->stream_info[i];
+                                if (cmp_si->full_before == false){
+                                    continue;
+                                }
                                 if (i == stream_choice || cmp_si->sender){
                                     continue;
                                 }
                                 // Check if L > (P - 1) * V_i
-                                // if (true){
-                                if ((pow(2, i - 1)) * spp->access_interval_precision > (spp->pages_per_superblock - 1) * cmp_si->avg_incoming_interval){
+                                if ((pow(2, i - 2)) * spp->access_interval_precision > (spp->pages_per_superblock - 1) * cmp_si->avg_incoming_interval){
                                     // The target must have L > (P - 1) * V_i, goes here
                                     if (page_death_time >= cmp_si->earliest_death_time && page_death_time <= cmp_si->latest_death_time){
                                         // Redirect
