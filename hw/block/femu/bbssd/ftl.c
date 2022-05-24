@@ -1161,7 +1161,7 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
                             if (si->full_before){
                                 si->avg_incoming_interval = si->avg_incoming_interval * (double)(1 - DECAY) + ((double)(uptime - si->stream_counter_start_time) / (double)(si->page_counter)) * (double)DECAY;
                             }else{
-                                write_log("Stream %d first full\n", stream_choice);
+                                write_log("Stream %d first reach line\n", stream_choice);
                                 si->avg_incoming_interval = ((double)(uptime - si->stream_counter_start_time) / (double)(si->page_counter));
                                 //write_log("Stream %d new avg full interval: %"PRIu64"\n", stream, si->avg_incoming_interval);
                                 si->full_before = true;
@@ -1173,11 +1173,22 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
                             si->page_counter = 0;
                             si->stream_counter_start_time = uptime;
                         }
+
+                        // if (si->full_before){
+                        //     si->avg_incoming_interval = si->avg_incoming_interval * (double)(1 - DECAY) + ((double)(uptime - si->stream_counter_start_time)) * (double)DECAY;
+                        // }else{
+                        //     si->avg_incoming_interval = ((double)(uptime - si->stream_counter_start_time));
+                        //     si->full_before = true;
+                        // }
+                        // si->stream_counter_start_time = uptime;
+
+
                         if (si->full_before && si->receiver == false && (pow(2, stream_choice - 1)) * spp->access_interval_precision < (spp->pages_per_superblock - 1) * si->avg_incoming_interval){
                             // Only redirect if we have previous interval info about this incoming stream
                             for (i = 2; i <= spp->msl; i++){
                                 cmp_si = &ssd->stream_info[i];
-                                if (cmp_si->full_before == false){
+                                // Do not redirect if target has higher freq than source stream
+                                if (cmp_si->full_before == false || si->avg_incoming_interval > cmp_si->avg_incoming_interval){
                                     continue;
                                 }
                                 if (i == stream_choice || cmp_si->sender){
