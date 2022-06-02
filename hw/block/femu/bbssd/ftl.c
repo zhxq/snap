@@ -287,6 +287,7 @@ static void ssd_init_write_pointer(struct ssd *ssd, uint8_t streams)
         si->sender = false;
         si->receiver = false;
         si->page_counter = 0;
+        si->received_pages = 0;
     }
 }
 
@@ -367,11 +368,18 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream, uint64_t 
                 write_log("Transient time: %"PRIu64" units\n", si->latest_death_time - max(get_passed_epoch_since_start(ssd), si->earliest_death_time));
                 write_log("-----\n\n");
                 */
+                wpp->curline->close_time = uptime;
+                wpp->curline->stream = stream;
+                wpp->curline->earliest_dt = si->earliest_death_time;
+                wpp->curline->latest_dt = si->latest_death_time;
+                write_log("Stream block %d closed, earliest DT: %"PRIu64", latest DT: %"PRIu64", Now: %"PRIu64"\n", stream, si->earliest_death_time, si->latest_death_time, uptime);
+                //wpp->curline->expected_h = ;
                 si->sender = false;
                 si->receiver = false;
                 si->block_open_time = uptime;
                 si->earliest_death_time = -1; // Max uint64_t
                 si->latest_death_time = 0;
+                si->received_pages = 0;
 
                 check_addr(wpp->blk, spp->blks_per_pl);
                 wpp->curline = NULL;
@@ -1183,19 +1191,19 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
                         // si->stream_counter_start_time = uptime;
 
 
-                        if (si->full_before && si->receiver == false && (pow(2, stream_choice - 1)) * spp->access_interval_precision < (spp->pages_per_superblock - 1) * si->avg_incoming_interval){
+                        if (si->full_before && si->receiver == false && (pow(2, stream_choice)) * spp->access_interval_precision < (spp->pages_per_superblock - 1) * si->avg_incoming_interval){
                             // Only redirect if we have previous interval info about this incoming stream
                             for (i = 2; i <= spp->msl; i++){
                                 cmp_si = &ssd->stream_info[i];
                                 // Do not redirect if target has higher freq than source stream
-                                if (cmp_si->full_before == false || si->avg_incoming_interval > cmp_si->avg_incoming_interval){
+                                if (cmp_si->full_before == false){
                                     continue;
                                 }
                                 if (i == stream_choice || cmp_si->sender){
                                     continue;
                                 }
                                 // Check if L > (P - 1) * V_i
-                                if ((pow(2, i - 2)) * spp->access_interval_precision > (spp->pages_per_superblock - 1) * cmp_si->avg_incoming_interval){
+                                if ((pow(2, i - 1)) * spp->access_interval_precision > (spp->pages_per_superblock - 1) * cmp_si->avg_incoming_interval){
                                     // The target must have L > (P - 1) * V_i, goes here
                                     if (page_death_time >= cmp_si->earliest_death_time && page_death_time <= cmp_si->latest_death_time){
                                         // Redirect
@@ -1203,6 +1211,7 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
                                         stream_choice = i;
                                         si->sender = true;
                                         cmp_si->receiver = true;
+                                        cmp_si->received_pages++;
                                         break;
                                     }
                                 }
@@ -1318,7 +1327,7 @@ static void ssd_dsm(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req){
 static void *ftl_thread(void *arg)
 {
     #ifdef FEMU_DEBUG_FTL
-    femu_log_file = fopen("/tmp/femu.log","a");
+    femu_log_file = fopen("/mnt/testpartition/femu.log","a");
     #endif
     FemuCtrl *n = (FemuCtrl *)arg;
     struct ssd *ssd = n->ssd;

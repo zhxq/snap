@@ -201,6 +201,11 @@ typedef struct line {
     QTAILQ_ENTRY(line) entry; /* in either {free,victim,full} list */
     /* position in the priority queue for victim lines */
     size_t                  pos;
+    int stream;
+    double earliest_dt;
+    double latest_dt;
+    double close_time;
+    double expected_h;
 } line;
 
 /* wp: record next write addr */
@@ -227,6 +232,8 @@ struct stream_info {
     double avg_incoming_interval;
     uint64_t stream_counter_start_time;
     uint64_t page_counter;
+
+    int received_pages;
 };
 
 struct line_mgmt {
