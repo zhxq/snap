@@ -281,6 +281,7 @@ static void ssd_init_write_pointer(struct ssd *ssd, uint8_t streams)
         si->earliest_death_time = -1; // Overflow on purpose. Max uint64_t.
         si->latest_death_time = 0;
         si->avg_incoming_interval = 0;
+        si->avg_temp_incoming_interval = 0;
         si->block_open_time = get_uptime(ssd);
         si->stream_counter_start_time = get_uptime(ssd);
         si->full_before = false;
@@ -1092,7 +1093,8 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
     int last_step_old_stream_choice = -1;
     int i;
     int r;
-
+    double stream_min_lifetime;
+    double cur_stream_max_lifetime;
     //write_log("++++Write start LPN: %"PRIu64", end LPN: %"PRIu64", given stream: %d, now start++++\n", start_lpn, end_lpn, dspec);
 
     ////write_log("%s, opcode:%#x, start_sec:%#lx, size:%#lx, streamenabled:%d, dspec:%#x\n", __func__, rw->opcode, start_lpn * ssd->sp.secs_per_pg, (end_lpn - start_lpn + 1) * ssd->sp.secsz * ssd->sp.secs_per_pg, stream, dspec);
@@ -1165,7 +1167,7 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
                             write_log("Update stream %d incoming interval: \n", stream_choice);
                             write_log("Old interval: %.15f\n", si->avg_incoming_interval);
                             write_log("Passed time: %"PRIu64"\n", (uptime - si->stream_counter_start_time));
-                            
+                            si->avg_temp_incoming_interval = ((double)(uptime - si->stream_counter_start_time) / (double)(si->page_counter));
                             if (si->full_before){
                                 si->avg_incoming_interval = si->avg_incoming_interval * (double)(1 - DECAY) + ((double)(uptime - si->stream_counter_start_time) / (double)(si->page_counter)) * (double)DECAY;
                             }else{
@@ -1190,8 +1192,9 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
                         // }
                         // si->stream_counter_start_time = uptime;
 
-
-                        if (si->full_before && si->receiver == false && (pow(2, stream_choice)) * spp->access_interval_precision < (spp->pages_per_superblock - 1) * si->avg_incoming_interval){
+                        stream_min_lifetime = pow(2, stream_choice) * spp->access_interval_precision;
+                        // Check if L < (P - 1) * V_i
+                        if (si->full_before && si->receiver == false && stream_min_lifetime < (spp->pages_per_superblock - 1) * si->avg_incoming_interval && stream_min_lifetime < (spp->pages_per_superblock - 1) * si->avg_temp_incoming_interval){
                             // Only redirect if we have previous interval info about this incoming stream
                             for (i = 2; i <= spp->msl; i++){
                                 cmp_si = &ssd->stream_info[i];
@@ -1202,8 +1205,9 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
                                 if (i == stream_choice || cmp_si->sender){
                                     continue;
                                 }
-                                // Check if L > (P - 1) * V_i
-                                if ((pow(2, i - 1)) * spp->access_interval_precision > (spp->pages_per_superblock - 1) * cmp_si->avg_incoming_interval){
+                                cur_stream_max_lifetime = (pow(2, i - 1)) * spp->access_interval_precision;
+                                // Check if L > (P - 1) * V_i && L > age of current stream i stream_counter_start_time
+                                if (cur_stream_max_lifetime > (spp->pages_per_superblock - 1) * cmp_si->avg_incoming_interval && cur_stream_max_lifetime > (uptime - cmp_si->stream_counter_start_time)){
                                     // The target must have L > (P - 1) * V_i, goes here
                                     if (page_death_time >= cmp_si->earliest_death_time && page_death_time <= cmp_si->latest_death_time){
                                         // Redirect

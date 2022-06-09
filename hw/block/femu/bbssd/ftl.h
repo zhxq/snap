@@ -230,6 +230,7 @@ struct stream_info {
     // The following entries are defined for the incoming stream
     bool full_before;
     double avg_incoming_interval;
+    double avg_temp_incoming_interval;
     uint64_t stream_counter_start_time;
     uint64_t page_counter;
 
