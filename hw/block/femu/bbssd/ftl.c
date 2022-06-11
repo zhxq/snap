@@ -258,14 +258,14 @@ static void ssd_init_lines(struct ssd *ssd)
 
 static void ssd_init_write_pointer(struct ssd *ssd, uint8_t streams)
 {
-    // n streams -> n+1 write pointers since we need stream 0 as default stream.
-    ssd->wp = g_malloc0(sizeof(struct write_pointer) * (streams + 1));
-    ssd->stream_info = g_malloc0(sizeof(struct stream_info) * (streams + 1));
+    // n streams -> n+2 write pointers since we need stream 0 as default stream and stream n+1 as GC stream.
+    ssd->wp = g_malloc0(sizeof(struct write_pointer) * (streams + 2));
+    ssd->stream_info = g_malloc0(sizeof(struct stream_info) * (streams + 2));
     struct write_pointer *wpp = NULL;
     struct stream_info *si = NULL;
     struct line_mgmt *lm = &ssd->lm;
     struct line *curline = NULL;
-    for (int i = 0; i <= streams; i++){
+    for (int i = 0; i <= streams + 1; i++){
         curline = QTAILQ_FIRST(&lm->free_line_list);
         QTAILQ_REMOVE(&lm->free_line_list, curline, entry);
         lm->free_line_cnt--;
@@ -604,6 +604,9 @@ void ssd_init(FemuCtrl *n)
     // Pass number of streams supported
     spp->enable_stream = n->enable_stream;
     spp->msl = n->msl;
+    if (!spp->enable_stream){
+        spp->msl = 0;
+    }
     spp->enable_stream_redirect = n->enable_stream_redirect;
     spp->access_interval_precision = n->access_interval_precision;
 
@@ -866,12 +869,13 @@ static uint64_t gc_write_page(struct ssd *ssd, struct ppa *old_ppa)
 {
     struct ppa new_ppa;
     struct nand_lun *new_lun;
+    struct ssdparams *spp = &ssd->sp;
     uint64_t lpn = get_rmap_ent(ssd, old_ppa);
 
     ftl_assert(valid_lpn(ssd, lpn));
     // For garbage collection, we just assign stream 0
     // since our previous guess of lifetime failed
-    new_ppa = get_new_page(ssd, 0);
+    new_ppa = get_new_page(ssd, spp->msl + 1);
     /* update maptbl */
     set_maptbl_ent(ssd, lpn, &new_ppa);
     /* update rmap */
@@ -880,7 +884,7 @@ static uint64_t gc_write_page(struct ssd *ssd, struct ppa *old_ppa)
     mark_page_valid(ssd, &new_ppa);
 
     /* need to advance the write pointer here */
-    ssd_advance_write_pointer(ssd, 0, lpn);
+    ssd_advance_write_pointer(ssd, spp->msl + 1, lpn);
 
     if (ssd->sp.enable_gc_delay) {
         struct nand_cmd gcw;
