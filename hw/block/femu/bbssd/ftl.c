@@ -9,12 +9,12 @@ FILE * femu_log_file;
     do { } while (0)
 #endif
 
- #define max(a,b) \
+#define max(a, b) \
    ({ __typeof__ (a) _a = (a); \
        __typeof__ (b) _b = (b); \
      _a > _b ? _a : _b; })
 
-#define min(a,b) \
+#define min(a, b) \
    ({ __typeof__ (a) _a = (a); \
        __typeof__ (b) _b = (b); \
      _a < _b ? _a : _b; })
@@ -40,6 +40,35 @@ static inline void set_maptbl_ent(struct ssd *ssd, uint64_t lpn, struct ppa *ppa
 {
     ftl_assert(lpn < ssd->sp.tt_pgs);
     ssd->maptbl[lpn] = *ppa;
+}
+
+static struct seq_write_info *init_seq_write_info(const uint size){
+    struct seq_write_info *s = g_malloc0(sizeof(struct seq_write_info));
+    s->size = size;
+    s->cur = 0;
+    s->list = g_malloc0(sizeof(uint64_t) * size);
+    s->inited = 0;
+    return s;
+}
+
+static bool check_seq_write_info(struct seq_write_info *s, uint64_t addr){
+    for (int i = 0; i < s->size; i++){
+        if (unlikely(i == s->inited)){
+            s->list[i] = addr;
+            s->inited += 1;
+            s->cur += 1;
+            return false;
+        }else{
+            if (s->list[i] == addr){
+                s->list[i] = addr;
+                return true;
+            }
+        }
+    }
+    s->cur %= s->size;
+    s->list[s->cur] = addr;
+    s->cur += 1;
+    return false;
 }
 
 // DZ Start
@@ -114,9 +143,13 @@ static void set_latest_access_time(FemuCtrl *n, struct ssd *ssd, uint64_t start_
     // So that the same chunk will not be reupdated
     uint64_t *chunks = g_malloc0(sizeof(uint64_t) * ((end_lpn - start_lpn) + 1));
     uint64_t num_chunks = get_chunk_list(n, ssd, start_lpn, end_lpn, chunks);
-    
+    bool is_recent;
     for (i = 0; i < num_chunks; i++){
         chunk = chunks[i];
+        is_recent = check_seq_write_info(ssd->seq_info, chunk);
+        if (is_recent && op == WRITE_OP){
+            continue;
+        }
         if (ssd->death_time_list[chunk].last_access_op != INITIAL_OP){
             prev_op = ssd->death_time_list[chunk].last_access_op;
             prev_avg = ssd->death_time_list[chunk].death_time_avg;
@@ -261,6 +294,7 @@ static void ssd_init_write_pointer(struct ssd *ssd, uint8_t streams)
     // n streams -> n+2 write pointers since we need stream 0 as default stream and stream n+1 as GC stream.
     ssd->wp = g_malloc0(sizeof(struct write_pointer) * (streams + 2));
     ssd->stream_info = g_malloc0(sizeof(struct stream_info) * (streams + 2));
+    ssd->seq_info = init_seq_write_info(streams * 4);
     struct write_pointer *wpp = NULL;
     struct stream_info *si = NULL;
     struct line_mgmt *lm = &ssd->lm;
@@ -439,7 +473,7 @@ static void ssd_init_params(struct ssdparams *spp)
     spp->secsz = 512;
     spp->secs_per_pg = 8;
     spp->pgs_per_blk = 256;
-    spp->blks_per_pl = 320; /* 20GB */
+    spp->blks_per_pl = 256; /* 16GB */
     spp->pls_per_lun = 1;
     spp->luns_per_ch = 8;
     spp->nchs = 8;
@@ -589,7 +623,7 @@ void ssd_init(FemuCtrl *n)
     struct ssdparams *spp = &ssd->sp;
 
     ftl_assert(ssd);
-
+    spp->channel_split_exp = n->channel_split_exp;
     ssd_init_params(spp);
 
     /* initialize ssd internal layout architecture */
@@ -910,6 +944,7 @@ static struct line *select_victim_line(struct ssd *ssd, bool force)
 {
     struct line_mgmt *lm = &ssd->lm;
     struct line *victim_line = NULL;
+    uint64_t passed_epoch_since_start = get_passed_epoch_since_start(ssd);
 
     victim_line = pqueue_peek(lm->victim_line_pq);
     if (!victim_line) {
@@ -917,6 +952,10 @@ static struct line *select_victim_line(struct ssd *ssd, bool force)
     }
 
     if (!force && victim_line->ipc < ssd->sp.pgs_per_line / 8) {
+        return NULL;
+    }
+
+    if (!force && ssd->sp.death_time_prediction && ssd->sp.enable_stream_redirect && victim_line->latest_dt > passed_epoch_since_start && victim_line->latest_dt - passed_epoch_since_start < 16){
         return NULL;
     }
 

@@ -187,6 +187,7 @@ struct ssdparams {
     bool death_time_prediction; /* Death Time Prediction Enabled */
     bool enable_stream;
     bool enable_stream_redirect;
+    int channel_split_exp;
     uint8_t msl;
     uint64_t epoch;   /* Last updated age */
     uint64_t start_time; /* When the system started */
@@ -198,6 +199,10 @@ typedef struct line {
     int id;  /* line id, the same as corresponding block id */
     int ipc; /* invalid page count in this line */
     int vpc; /* valid page count in this line */
+
+    int start_channel;
+    int total_channels;
+
     QTAILQ_ENTRY(line) entry; /* in either {free,victim,full} list */
     /* position in the priority queue for victim lines */
     size_t                  pos;
@@ -288,6 +293,14 @@ struct death_time_track {
     uint64_t prev_death_time_prediction : TIME_PREC_BITS;
     #endif
 };
+
+struct seq_write_info {
+    uint size;
+    uint cur;
+    uint64_t *list;
+    uint inited;
+};
+
 // DZ End
 
 struct ssd {
@@ -312,6 +325,7 @@ struct ssd {
     QemuThread ftl_thread;
     uint64_t pages_from_host;
     uint64_t pages_from_gc;
+    struct seq_write_info *seq_info;
 };
 
 void ssd_init(FemuCtrl *n);
