@@ -395,12 +395,10 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream, uint64_t 
                 /* move current line to {victim,full} line list */
                 if (wpp->curline->vpc == wpp->curline->pgs_per_line) {
                     /* all pgs are still valid, move to full line list */
-                    ftl_debug("wpp->curline->vpc: %d, wpp->curline->ipc: %d, total: %d, should_be: %d\n", wpp->curline->vpc, wpp->curline->ipc, wpp->curline->vpc + wpp->curline->ipc, wpp->curline->pgs_per_line);
                     ftl_assert(wpp->curline->ipc == 0);
                     QTAILQ_INSERT_TAIL(&lm->full_line_list, wpp->curline, entry);
                     lm->full_line_cnt++;
                 } else {
-                    ftl_debug("wpp->curline->vpc: %d, wpp->curline->ipc: %d, total: %d, should_be: %d\n", wpp->curline->vpc, wpp->curline->ipc, wpp->curline->vpc + wpp->curline->ipc, wpp->curline->pgs_per_line);
                     ftl_assert(wpp->curline->vpc >= 0 && wpp->curline->vpc < wpp->curline->pgs_per_line);
                     /* there must be some invalid pages in this line */
                     ftl_assert(wpp->curline->ipc > 0);
@@ -468,8 +466,6 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream, uint64_t 
                 ftl_assert(wpp->ch == wpp->curline->start_channel);
                 /* TODO: assume # of pl_per_lun is 1, fix later */
                 ftl_assert(wpp->pl == 0);
-                ftl_debug("line %d,blk=%d,ch=%d\n", wpp->curline->id, wpp->blk, wpp->ch);
-                write_log("line %d,blk=%d,ch=%d\n", wpp->curline->id, wpp->blk, wpp->ch);
             }
         }
     }
