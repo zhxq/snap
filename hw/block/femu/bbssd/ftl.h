@@ -166,7 +166,8 @@ struct ssdparams {
     int pgs_per_ch;   /* # of pages per channel */
     int tt_pgs;       /* total # of pages in the SSD */
 
-    int blks_per_lun; /* # of blocks per LUN */
+    int min_blks_per_lun; /* min # of blocks per LUN */
+    int blks_per_lun; /* # of blocks per LUN, supports using several of all channels */
     int blks_per_ch;  /* # of blocks per channel */
     int tt_blks;      /* total # of blocks in the SSD */
 
@@ -187,7 +188,9 @@ struct ssdparams {
     bool death_time_prediction; /* Death Time Prediction Enabled */
     bool enable_stream;
     bool enable_stream_redirect;
-    int channel_split_exp;
+    uint32_t channel_split_exp;
+    int channel_regions;
+    int min_channels_per_line;
     uint8_t msl;
     uint64_t epoch;   /* Last updated age */
     uint64_t start_time; /* When the system started */
@@ -199,9 +202,9 @@ typedef struct line {
     int id;  /* line id, the same as corresponding block id */
     int ipc; /* invalid page count in this line */
     int vpc; /* valid page count in this line */
-
-    int start_channel;
-    int total_channels;
+    int pgs_per_line;  /* pages in this line */
+    int start_channel; /* The start channel # for this line to use */
+    int total_channels; /* Number of channels this line can use */
 
     QTAILQ_ENTRY(line) entry; /* in either {free,victim,full} list */
     /* position in the priority queue for victim lines */
@@ -254,6 +257,7 @@ struct line_mgmt {
     int victim_line_cnt;
     int full_line_cnt;
     uint8_t *block_to_stream;
+    struct line ***channel_lines;
 };
 
 struct nand_cmd {
