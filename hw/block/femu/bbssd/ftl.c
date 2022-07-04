@@ -852,7 +852,6 @@ static void mark_page_invalid(struct ssd *ssd, struct ppa *ppa)
 
     /* update corresponding line status */
     line = get_line(ssd, ppa);
-    write_log("line at ch %d, blk %d, addr: %p\n", ppa->g.ch, ppa->g.blk, line);
     ftl_assert(line->ipc >= 0 && line->ipc < line->pgs_per_line);
     if (line->vpc == line->pgs_per_line) {
         ftl_assert(line->ipc == 0);
