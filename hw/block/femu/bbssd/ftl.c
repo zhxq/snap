@@ -292,10 +292,18 @@ static void ssd_init_lines(struct ssd *ssd)
         for (j = 0; j < line->total_channels; j++){
             lm->channel_lines[i % spp->blks_per_lun][line->start_channel + j] = line;
         }
-        /* initialize all the lines as free lines */
-        QTAILQ_INSERT_TAIL(&lm->free_line_list, line, entry);
-        lm->free_line_cnt++;
-        
+    }
+
+    // Interleave different channels
+    for (i = 0; i < spp->blks_per_lun; i++){
+        for (j = 0; j < spp->nchs; j += spp->min_channels_per_line){
+            line = lm->channel_lines[i][j];
+            // ftl_debug("i: %d, j: %d, line_id: %d, blk: %d, start_channel: %d\n", i, j, line->id, line->id % spp->blks_per_lun, line->start_channel);
+            
+            /* initialize all the lines as free lines */
+            QTAILQ_INSERT_TAIL(&lm->free_line_list, line, entry);
+            lm->free_line_cnt++;
+        }
     }
 
     ftl_assert(lm->free_line_cnt == lm->tt_lines);
@@ -324,7 +332,7 @@ static void ssd_init_write_pointer(struct ssd *ssd, uint8_t streams)
         wpp->ch = wpp->curline->start_channel;
         wpp->lun = 0;
         wpp->pg = 0;
-        wpp->blk = i;
+        wpp->blk = wpp->curline->id % ssd->sp.blks_per_lun;
         wpp->pl = 0;
         si->earliest_death_time = -1; // Overflow on purpose. Max uint64_t.
         si->latest_death_time = 0;
@@ -386,7 +394,7 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream, uint64_t 
             wpp->lun = 0;
             /* go to next page in the block */
             if (!(wpp->pg >= 0 && wpp->pg < spp->pgs_per_blk)){
-                ftl_debug("pg bug: wpp->lun: %d, spp->pgs_per_blk: %d\n", wpp->pg, spp->pgs_per_blk);
+                ftl_debug("pg bug: wpp->pg: %d, spp->pgs_per_blk: %d\n", wpp->pg, spp->pgs_per_blk);
             }
             check_addr(wpp->pg, spp->pgs_per_blk);
             wpp->pg++;
