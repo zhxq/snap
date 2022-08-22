@@ -204,8 +204,11 @@ typedef struct line {
     int vpc; /* valid page count in this line */
     int pgs_per_line;  /* pages in this line */
     int start_channel; /* The start channel # for this line to use */
+    int *channel_list; /* The list of channels IDs to use */
+    int **lun_list;     /* The list of LUNs to use */
+    int **block_list;   /* The list of block IDs to use */
     int total_channels; /* Number of channels this line can use */
-
+    int *total_luns;    /* Number of LUNs per channel used */
     QTAILQ_ENTRY(line) entry; /* in either {free,victim,full} list */
     /* position in the priority queue for victim lines */
     size_t                  pos;
