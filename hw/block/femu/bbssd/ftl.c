@@ -346,6 +346,7 @@ static void ssd_init_write_pointer(struct ssd *ssd, uint8_t streams)
     struct line *curline = NULL;
     for (int i = 0; i <= streams + 1; i++){
         curline = QTAILQ_FIRST(&lm->free_line_list);
+        curline->stream = i; // Initialize stream ID
         QTAILQ_REMOVE(&lm->free_line_list, curline, entry);
         lm->free_line_cnt--;
         wpp = &ssd->wp[i];
@@ -472,6 +473,7 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream, uint64_t 
                 si->received_pages = 0;
                 wpp->curline = NULL;
                 wpp->curline = get_next_free_line(ssd);
+                wpp->curline->stream = stream;
                 ftl_debug("Stream %d now has line %d,victim=%d,full=%d,free=%d,lpn=%"PRIu64",hostpgs=%"PRIu64",gcpgs=%"PRIu64"\n", stream, wpp->curline->id,
                     ssd->lm.victim_line_cnt, ssd->lm.full_line_cnt,
                     ssd->lm.free_line_cnt, lpn, ssd->pages_from_host, ssd->pages_from_gc);
