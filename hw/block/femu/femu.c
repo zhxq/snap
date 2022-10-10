@@ -688,7 +688,9 @@ static Property femu_props[] = {
     DEFINE_PROP_UINT32("access_interval_precision", FemuCtrl, access_interval_precision, 32),
     DEFINE_PROP_BOOL("hashing_support", FemuCtrl, enable_hashing, false),
     DEFINE_PROP_BOOL("cascade_stream", FemuCtrl, enable_stream_redirect, true),
-    DEFINE_PROP_UINT32("channel_split_exp", FemuCtrl, channel_split_exp, 0),
+    DEFINE_PROP_UINT32("init_channel_per_line", FemuCtrl, init_channel_per_line, 8),
+    DEFINE_PROP_UINT32("init_lun_per_channel", FemuCtrl, init_lun_per_channel, 8),
+    DEFINE_PROP_UINT32("init_blk_per_plane", FemuCtrl, init_blk_per_plane, 1),
     DEFINE_PROP_END_OF_LIST(),
 };
 

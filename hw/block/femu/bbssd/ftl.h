@@ -189,8 +189,12 @@ struct ssdparams {
     bool enable_stream;
     bool enable_stream_redirect;
     uint32_t channel_split_exp;
+    uint32_t init_channel_per_line;
+    uint32_t init_lun_per_channel;
+    uint32_t init_blk_per_plane;
     int channel_regions;
-    int min_channels_per_line;
+    int lun_regions;
+    int blk_regions;
     uint8_t msl;
     uint64_t epoch;   /* Last updated age */
     uint64_t start_time; /* When the system started */
@@ -204,6 +208,7 @@ typedef struct line {
     int vpc; /* valid page count in this line */
     int pgs_per_line;  /* pages in this line */
     int start_channel; /* The start channel # for this line to use */
+    int start_lun; /* The start channel # for this line to use */
     int *channel_list; /* The list of channels IDs to use */
     int **lun_list;     /* The list of LUNs to use */
     int **block_list;   /* The list of block IDs to use */
@@ -260,7 +265,7 @@ struct line_mgmt {
     int victim_line_cnt;
     int full_line_cnt;
     uint8_t *block_to_stream;
-    struct line ***channel_lines;
+    struct line ****channel_lines;
 };
 
 struct nand_cmd {

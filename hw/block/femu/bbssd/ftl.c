@@ -273,7 +273,7 @@ static void ssd_init_lines(struct ssd *ssd)
     lm->tt_lines = spp->tt_lines;
     ftl_assert(lm->tt_lines == spp->tt_lines);
     lm->lines = g_malloc0(sizeof(struct line) * lm->tt_lines);
-    lm->channel_lines = g_malloc0(sizeof(struct line**) * spp->blks_per_lun);
+    lm->channel_lines = g_malloc0(sizeof(struct line***) * spp->blks_per_lun);
     
     QTAILQ_INIT(&lm->free_line_list);
     lm->victim_line_pq = pqueue_init(spp->tt_lines, victim_line_cmp_pri,
@@ -290,26 +290,33 @@ static void ssd_init_lines(struct ssd *ssd)
         line->pos = 0;
 
         if (i < spp->blks_per_lun){
-            lm->channel_lines[i] = g_malloc0(sizeof(struct line*) * spp->nchs);
+            lm->channel_lines[i] = g_malloc0(sizeof(struct line**) * spp->nchs);
+            for (j = 0; j < spp->nchs; j++){
+                lm->channel_lines[i][j] = NULL;
+            }
         }
         
-        line->start_channel = i / (spp->blks_per_lun) * spp->min_channels_per_line;
-        line->total_channels = spp->min_channels_per_line;
+        line->start_channel = i / (spp->blks_per_lun) / spp->lun_regions * spp->init_channel_per_line;
+        line->total_channels = spp->init_channel_per_line;
         line->channel_list = g_malloc0(sizeof(int) * line->total_channels);
+        line->start_lun = ((i / (spp->blks_per_lun)) % spp->lun_regions) * spp->init_lun_per_channel;
         line->total_luns = g_malloc0(sizeof(int*) * line->total_channels);
         line->lun_list = g_malloc0(sizeof(int*) * line->total_channels);
         line->block_list = g_malloc0(sizeof(int*) * line->total_channels);
         line->pgs_per_line = 0;
         for (j = 0; j < line->total_channels; j++){
-            lm->channel_lines[i % spp->blks_per_lun][line->start_channel + j] = line;
+            if (lm->channel_lines[i % spp->blks_per_lun][j + line->start_channel] == NULL){
+                lm->channel_lines[i % spp->blks_per_lun][j + line->start_channel] = g_malloc0(sizeof(struct line*) * spp->luns_per_ch);
+            }
             // Assign flexible channels
-            line->channel_list[j] = line->start_channel + j;
+            line->channel_list[j] = j + line->start_channel;
             // Assign flexible LUNs
-            line->total_luns[j] = spp->luns_per_ch;
+            line->total_luns[j] = spp->init_lun_per_channel;
             line->lun_list[j] = g_malloc0(sizeof(int) * line->total_luns[j]);
             line->block_list[j] = g_malloc0(sizeof(int) * line->total_luns[j]);
             for (k = 0; k < line->total_luns[j]; k++){
-                line->lun_list[j][k] = k;
+                lm->channel_lines[i % spp->blks_per_lun][j + line->start_channel][line->start_lun + k] = line;
+                line->lun_list[j][k] = line->start_lun + k;
                 // Assign flexible blocks
                 line->block_list[j][k] = i % spp->blks_per_lun;
                 line->pgs_per_line += spp->pgs_per_blk;
@@ -319,13 +326,15 @@ static void ssd_init_lines(struct ssd *ssd)
 
     // Interleave different channels
     for (i = 0; i < spp->blks_per_lun; i++){
-        for (j = 0; j < spp->nchs; j += spp->min_channels_per_line){
-            line = lm->channel_lines[i][j];
-            // ftl_debug("i: %d, j: %d, line_id: %d, blk: %d, start_channel: %d\n", i, j, line->id, line->id % spp->blks_per_lun, line->start_channel);
-            
-            /* initialize all the lines as free lines */
-            QTAILQ_INSERT_TAIL(&lm->free_line_list, line, entry);
-            lm->free_line_cnt++;
+        for (j = 0; j < spp->nchs; j += spp->init_channel_per_line){
+            for (k = 0; k < spp->luns_per_ch; k += spp->init_lun_per_channel){
+                line = lm->channel_lines[i][j][k];
+                // write_log("i: %d, j: %d, k: %d, line_id: %d, blk: %d, start_channel: %d, start_lun: %d\n", i, j, k, line->id, line->id % spp->blks_per_lun, line->start_channel, line->start_lun);
+                // fflush(NULL);
+                /* initialize all the lines as free lines */
+                QTAILQ_INSERT_TAIL(&lm->free_line_list, line, entry);
+                lm->free_line_cnt++;
+            }
         }
     }
 
@@ -539,7 +548,8 @@ static void ssd_init_params(struct ssdparams *spp)
     spp->luns_per_ch = 8;
     spp->nchs = 8;
 
-    spp->min_channels_per_line = spp->nchs / spp->channel_regions;
+    //spp->min_channels_per_line = spp->nchs / spp->channel_regions;
+    //spp->min_channels_per_line = spp->init_channel_per_line;
 
     spp->pg_rd_lat = NAND_READ_LATENCY;
     spp->pg_wr_lat = NAND_PROG_LATENCY;
@@ -566,12 +576,18 @@ static void ssd_init_params(struct ssdparams *spp)
     spp->tt_pls = spp->pls_per_ch * spp->nchs;
 
     spp->tt_luns = spp->luns_per_ch * spp->nchs;
-
+    ftl_assert(spp->nchs % spp->init_channel_per_line == 0);
+    ftl_assert(spp->luns_per_ch % spp->init_lun_per_channel == 0);
+    ftl_assert(spp->blks_per_pl % spp->init_blk_per_plane == 0);
+    //spp->channel_regions = (1 << spp->channel_split_exp);
+    spp->channel_regions = spp->nchs / spp->init_channel_per_line;
+    spp->lun_regions = spp->luns_per_ch / spp->init_lun_per_channel;
+    spp->blk_regions = spp->blks_per_pl / spp->init_blk_per_plane;
     /* line is special, put it at the end */
     spp->blks_per_line = spp->tt_luns; /* TODO: to fix under multiplanes */
     spp->pgs_per_line = spp->blks_per_line * spp->pgs_per_blk;
     spp->secs_per_line = spp->pgs_per_line * spp->secs_per_pg;
-    spp->tt_lines = spp->blks_per_lun * spp->channel_regions; /* TODO: to fix under multiplanes */
+    spp->tt_lines = spp->blks_per_lun * spp->channel_regions * spp->lun_regions / spp->init_blk_per_plane; /* TODO: to fix under multiplanes */
 
     spp->gc_thres_pcent = 0.75;
     spp->gc_thres_lines = (int)((1 - spp->gc_thres_pcent) * spp->tt_lines);
@@ -677,15 +693,20 @@ static void ssd_init_rmap(struct ssd *ssd)
 
 void ssd_init(FemuCtrl *n)
 {
+    #ifdef FEMU_DEBUG_FTL
+    femu_log_file = fopen("/mnt/testpartition/femu.log","a");
+    #endif
     struct ssd *ssd = n->ssd;
     ssd->pages_from_host = 0;
     ssd->pages_from_gc = 0;
-    
+
     struct ssdparams *spp = &ssd->sp;
 
     ftl_assert(ssd);
     spp->channel_split_exp = n->channel_split_exp;
-    spp->channel_regions = (1 << spp->channel_split_exp);
+    spp->init_channel_per_line = n->init_channel_per_line;
+    spp->init_lun_per_channel = n->init_lun_per_channel;
+    spp->init_blk_per_plane = n->init_blk_per_plane;
     ssd_init_params(spp);
 
     /* initialize ssd internal layout architecture */
@@ -778,7 +799,7 @@ static inline struct nand_block *get_blk(struct ssd *ssd, struct ppa *ppa)
 
 static inline struct line *get_line(struct ssd *ssd, struct ppa *ppa)
 {
-    return (ssd->lm.channel_lines[ppa->g.blk][ppa->g.ch]);
+    return (ssd->lm.channel_lines[ppa->g.blk][ppa->g.ch][ppa->g.lun]);
 }
 
 static inline struct nand_page *get_pg(struct ssd *ssd, struct ppa *ppa)
@@ -1437,9 +1458,6 @@ static void ssd_dsm(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req){
 
 static void *ftl_thread(void *arg)
 {
-    #ifdef FEMU_DEBUG_FTL
-    femu_log_file = fopen("/mnt/testpartition/femu.log","a");
-    #endif
     FemuCtrl *n = (FemuCtrl *)arg;
     struct ssd *ssd = n->ssd;
     NvmeRequest *req = NULL;
