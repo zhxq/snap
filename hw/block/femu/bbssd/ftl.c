@@ -329,8 +329,8 @@ static void ssd_init_lines(struct ssd *ssd)
         for (j = 0; j < spp->nchs; j += spp->init_channel_per_line){
             for (k = 0; k < spp->luns_per_ch; k += spp->init_lun_per_channel){
                 line = lm->channel_lines[i][j][k];
-                // write_log("i: %d, j: %d, k: %d, line_id: %d, blk: %d, start_channel: %d, start_lun: %d\n", i, j, k, line->id, line->id % spp->blks_per_lun, line->start_channel, line->start_lun);
-                // fflush(NULL);
+                write_log("i: %d, j: %d, k: %d, line_id: %d, blk: %d, start_channel: %d, start_lun: %d\n", i, j, k, line->id, line->id % spp->blks_per_lun, line->start_channel, line->start_lun);
+                fflush(NULL);
                 /* initialize all the lines as free lines */
                 QTAILQ_INSERT_TAIL(&lm->free_line_list, line, entry);
                 lm->free_line_cnt++;
@@ -483,9 +483,10 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream, uint64_t 
                 wpp->curline = NULL;
                 wpp->curline = get_next_free_line(ssd);
                 wpp->curline->stream = stream;
-                ftl_debug("Stream %d now has line %d,victim=%d,full=%d,free=%d,lpn=%"PRIu64",hostpgs=%"PRIu64",gcpgs=%"PRIu64"\n", stream, wpp->curline->id,
+                /* ftl_debug("Stream %d now has line %d,victim=%d,full=%d,free=%d,lpn=%"PRIu64",hostpgs=%"PRIu64",gcpgs=%"PRIu64"\n", stream, wpp->curline->id,
                     ssd->lm.victim_line_cnt, ssd->lm.full_line_cnt,
-                    ssd->lm.free_line_cnt, lpn, ssd->pages_from_host, ssd->pages_from_gc);
+                    ssd->lm.free_line_cnt, lpn, ssd->pages_from_host, ssd->pages_from_gc);*/
+                write_log("[4,%d,%d,%d,%d,%d,%"PRIu64",%"PRIu64"]\n", stream, wpp->curline->id, ssd->lm.victim_line_cnt, ssd->lm.full_line_cnt, ssd->lm.free_line_cnt, ssd->pages_from_host, ssd->pages_from_gc);
                 if (!wpp->curline) {
                     /* TODO */
                     ftl_debug("Failed to get a line\n");
@@ -542,8 +543,8 @@ static void ssd_init_params(struct ssdparams *spp)
     spp->secsz = 512;
     spp->secs_per_pg = 8;
     spp->pgs_per_blk = 256;
-    //spp->blks_per_pl = 256; /* 16GB */
-    spp->blks_per_pl = 320; /* 20GB */
+    spp->blks_per_pl = 256; /* 16GB */
+    //spp->blks_per_pl = 320; /* 20GB */
     spp->pls_per_lun = 1;
     spp->luns_per_ch = 8;
     spp->nchs = 8;
@@ -1099,8 +1100,8 @@ static int do_gc(struct ssd *ssd, bool force)
         return -1;
     }
 
-    
-    ftl_debug("GC-ing line:%d,ipc=%d,victim=%d,full=%d,free=%d\n", victim_line->id, victim_line->ipc, ssd->lm.victim_line_cnt, ssd->lm.full_line_cnt, ssd->lm.free_line_cnt);
+    // Line ID, Invalid count, Victim line count, Full line count, Free line count
+    write_log("[3,%d,%d,%d,%d,%d]\n", victim_line->id, victim_line->ipc, ssd->lm.victim_line_cnt, ssd->lm.full_line_cnt, ssd->lm.free_line_cnt);
 
     /* copy back valid data */
     for (ch = 0; ch < victim_line->total_channels; ch++) {
