@@ -572,19 +572,6 @@ static void mark_page_invalid(struct ssd *ssd, struct ppa *ppa)
     }
 }
 
-static void dump_invalid_distribution(struct ssd *ssd){
-    int lineid = 0;
-    struct line_mgmt *lm = &ssd->lm;
-    write_log("[5,");
-    for (lineid = 0; lineid < lm->tt_lines; lineid++){
-        write_log("%d", lm->lines[lineid].ipc);
-        if (lineid != lm->tt_lines - 1){
-            write_log(",");
-        }
-    }
-    write_log("]\n");
-}
-
 static void mark_page_valid(struct ssd *ssd, struct ppa *ppa)
 {
     struct nand_block *blk = NULL;
@@ -746,7 +733,6 @@ static int do_gc(struct ssd *ssd, bool force)
     if (!victim_line) {
         return -1;
     }
-    dump_invalid_distribution(ssd);
 
     ppa.g.blk = victim_line->id;
     ftl_debug("GC-ing line:%d,ipc=%d,victim=%d,full=%d,free=%d\n", ppa.g.blk,

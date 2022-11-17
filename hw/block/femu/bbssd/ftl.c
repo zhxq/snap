@@ -1087,6 +1087,19 @@ static void mark_line_free(struct ssd *ssd, struct ppa *ppa)
     lm->free_line_cnt++;
 }
 
+static void dump_invalid_distribution(struct ssd *ssd){
+    int lineid = 0;
+    struct line_mgmt *lm = &ssd->lm;
+    write_log("[5,");
+    for (lineid = 0; lineid < lm->tt_lines; lineid++){
+        write_log("%d", lm->lines[lineid].ipc);
+        if (lineid != lm->tt_lines - 1){
+            write_log(",");
+        }
+    }
+    write_log("]\n");
+}
+
 static int do_gc(struct ssd *ssd, bool force)
 {
     struct line *victim_line = NULL;
@@ -1099,7 +1112,7 @@ static int do_gc(struct ssd *ssd, bool force)
     if (!victim_line) {
         return -1;
     }
-
+    dump_invalid_distribution(ssd);
     // Line ID, Invalid count, Victim line count, Full line count, Free line count
     write_log("[3,%d,%d,%d,%d,%d]\n", victim_line->id, victim_line->ipc, ssd->lm.victim_line_cnt, ssd->lm.full_line_cnt, ssd->lm.free_line_cnt);
 
