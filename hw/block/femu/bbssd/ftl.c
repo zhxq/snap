@@ -332,6 +332,7 @@ static void ssd_init_lines(struct ssd *ssd)
                 write_log("i: %d, j: %d, k: %d, line_id: %d, blk: %d, start_channel: %d, start_lun: %d\n", i, j, k, line->id, line->id % spp->blks_per_lun, line->start_channel, line->start_lun);
                 fflush(NULL);
                 /* initialize all the lines as free lines */
+                line->use = USE_FREE;
                 QTAILQ_INSERT_TAIL(&lm->free_line_list, line, entry);
                 lm->free_line_cnt++;
             }
@@ -356,6 +357,7 @@ static void ssd_init_write_pointer(struct ssd *ssd, uint8_t streams)
     for (int i = 0; i <= streams + 1; i++){
         curline = QTAILQ_FIRST(&lm->free_line_list);
         curline->stream = i; // Initialize stream ID
+        curline->use = USE_INUSE;
         QTAILQ_REMOVE(&lm->free_line_list, curline, entry);
         lm->free_line_cnt--;
         wpp = &ssd->wp[i];
@@ -399,6 +401,7 @@ static struct line *get_next_free_line(struct ssd *ssd)
 
     QTAILQ_REMOVE(&lm->free_line_list, curline, entry);
     lm->free_line_cnt--;
+    curline->use = USE_INUSE;
     return curline;
 }
 
@@ -468,6 +471,7 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream, uint64_t 
                 write_log("Transient time: %"PRIu64" units\n", si->latest_death_time - max(get_passed_epoch_since_start(ssd), si->earliest_death_time));
                 write_log("-----\n\n");
                 */
+                wpp->curline->use = USE_FULL;
                 wpp->curline->close_time = uptime;
                 wpp->curline->stream = stream;
                 wpp->curline->earliest_dt = si->earliest_death_time;
@@ -1082,19 +1086,22 @@ static void mark_line_free(struct ssd *ssd, struct ppa *ppa)
     struct line *line = get_line(ssd, ppa);
     line->ipc = 0;
     line->vpc = 0;
+    line->use = USE_FREE;
     /* move this line to free line list */
     QTAILQ_INSERT_TAIL(&lm->free_line_list, line, entry);
     lm->free_line_cnt++;
 }
 
-static void dump_invalid_distribution(struct ssd *ssd){
+static void dump_valid_distribution(struct ssd *ssd){
     int lineid = 0;
     struct line_mgmt *lm = &ssd->lm;
     write_log("[5,");
     for (lineid = 0; lineid < lm->tt_lines; lineid++){
-        write_log("%d", lm->lines[lineid].ipc);
-        if (lineid != lm->tt_lines - 1){
-            write_log(",");
+        if (lm->lines[lineid].use == USE_FULL){
+            write_log("%d", lm->lines[lineid].vpc);
+            if (lineid != lm->tt_lines - 1){
+                write_log(",");
+            }
         }
     }
     write_log("]\n");
@@ -1106,13 +1113,14 @@ static int do_gc(struct ssd *ssd, bool force)
     struct ssdparams *spp = &ssd->sp;
     struct nand_lun *lunp;
     struct ppa ppa;
+    ppa.ppa = INVALID_PPA;
     int ch, lun;
 
     victim_line = select_victim_line(ssd, force);
     if (!victim_line) {
         return -1;
     }
-    dump_invalid_distribution(ssd);
+    dump_valid_distribution(ssd);
     // Line ID, Invalid count, Victim line count, Full line count, Free line count
     write_log("[3,%d,%d,%d,%d,%d]\n", victim_line->id, victim_line->ipc, ssd->lm.victim_line_cnt, ssd->lm.full_line_cnt, ssd->lm.free_line_cnt);
 
@@ -1142,6 +1150,7 @@ static int do_gc(struct ssd *ssd, bool force)
         }
     }
 
+    assert(ppa.ppa != INVALID_PPA);
     /* update line status */
     mark_line_free(ssd, &ppa);
 

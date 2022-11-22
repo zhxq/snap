@@ -24,6 +24,11 @@
 #define TIME_PREC_BITS    (15)
 // ms to s
 #define MS_PER_S 1000
+
+
+#define USE_FREE  0
+#define USE_INUSE 1
+#define USE_FULL  2
 // DZ End
 
 enum {
@@ -222,6 +227,7 @@ typedef struct line {
     double latest_dt;
     double close_time;
     double expected_h;
+    int use;
 } line;
 
 /* wp: record next write addr */
