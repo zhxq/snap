@@ -155,8 +155,10 @@ struct ssdparams {
 
     double gc_thres_pcent;
     int gc_thres_lines;
+    int gc_thres_blocks;
     double gc_thres_pcent_high;
     int gc_thres_lines_high;
+    int gc_thres_blocks_high;
     bool enable_gc_delay;
 
     /* below are all calculated values */
@@ -208,6 +210,8 @@ struct ssdparams {
 };
 
 typedef struct line {
+    QTAILQ_ENTRY(line) **full_entry; /* in either {free,victim,full} list */
+    QTAILQ_ENTRY(line) **victim_entry; /* in either {free,victim,full} list */
     int id;  /* line id, the same as corresponding block id */
     int ipc; /* invalid page count in this line */
     int vpc; /* valid page count in this line */
@@ -219,15 +223,19 @@ typedef struct line {
     int **block_list;   /* The list of block IDs to use */
     int total_channels; /* Number of channels this line can use */
     int *total_luns;    /* Number of LUNs per channel used */
-    QTAILQ_ENTRY(line) entry; /* in either {free,victim,full} list */
-    /* position in the priority queue for victim lines */
-    size_t                  pos;
+    
+    
+    bool **inserted_to_full_queue;
+    bool **inserted_to_victim_queue;
+    bool valid;
     int stream;
     double earliest_dt;
     double latest_dt;
     double close_time;
     double expected_h;
     int use;
+    int curchannel;
+    int curlun;
 } line;
 
 /* wp: record next write addr */
@@ -259,18 +267,20 @@ struct stream_info {
     int received_pages;
 };
 
-struct line_mgmt {
-    struct line *lines;
+struct line_resource_mgmt{
     /* free line list, we only need to maintain a list of blk numbers */
     QTAILQ_HEAD(free_line_list, line) free_line_list;
-    pqueue_t *victim_line_pq;
-    //QTAILQ_HEAD(victim_line_list, line) victim_line_list;
+    QTAILQ_HEAD(victim_line_list, line) victim_line_list;
     QTAILQ_HEAD(full_line_list, line) full_line_list;
-    int tt_lines;
     int free_line_cnt;
     int victim_line_cnt;
     int full_line_cnt;
-    uint8_t *block_to_stream;
+};
+
+struct line_mgmt {
+    struct line *lines;
+    struct line_resource_mgmt** line_resource;
+    int tt_lines;
     struct line ****channel_lines;
 };
 
@@ -319,6 +329,26 @@ struct seq_write_info {
     uint inited;
 };
 
+struct block_num{
+    int block_num;
+    QTAILQ_ENTRY(block_num) entry;
+};
+
+struct block_mgmt {
+    int free_blocks_cnt;
+    QTAILQ_HEAD(free_block_list, block_num) free_block_list;
+};
+
+struct lun_mgmt{
+    int next_avail_lun;
+    struct block_mgmt* lun;
+};
+
+struct channel_mgmt{
+    int next_avail_channel;
+    uint64_t next_line_id;
+    struct lun_mgmt* channel;
+};
 // DZ End
 
 struct ssd {
@@ -344,6 +374,7 @@ struct ssd {
     uint64_t pages_from_host;
     uint64_t pages_from_gc;
     struct seq_write_info *seq_info;
+    struct channel_mgmt channel_mgmt;
 };
 
 void ssd_init(FemuCtrl *n);
