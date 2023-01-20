@@ -301,7 +301,7 @@ static struct line* create_line(struct ssd *ssd, int channels, int luns){
     struct ssdparams *spp = &ssd->sp;
     struct line_mgmt *lm = &ssd->lm;
     int i, j, k;
-    struct line *line = (struct line *)malloc(sizeof(struct line));
+    struct line *line = (struct line *)g_malloc0(sizeof(struct line));
     struct channel_mgmt *channel_mgmt = &ssd->channel_mgmt;
     struct lun_mgmt *lun_mgmt;
     struct block_mgmt *block_mgmt;
@@ -312,7 +312,8 @@ static struct line* create_line(struct ssd *ssd, int channels, int luns){
     line->valid = true;
     line->total_channels = channels;
     line->channel_list = g_malloc0(sizeof(int) * line->total_channels);
-    write_log("+++Creating line with %d channels and %d luns with id %d start+++\n", channels, luns, line->id);
+    // write_log("+++Creating line with %d channels and %d luns with id %d start+++\n", channels, luns, line->id);
+    write_log("[7, %d, %d, %d]\n", channels, luns, line->id);
     // fflush(NULL);
     //line->start_lun = ((i / (spp->blks_per_lun)) % spp->lun_regions) * spp->init_lun_per_channel;
     line->total_luns = g_malloc0(sizeof(int*) * line->total_channels);
@@ -335,10 +336,10 @@ static struct line* create_line(struct ssd *ssd, int channels, int luns){
         }
     }
     for (j = 0; j < line->total_channels; j++){
-        write_log("j = %d\n", j);
+        // write_log("j = %d\n", j);
         // fflush(NULL);
         lun_mgmt = &channel_mgmt->channel[channel_mgmt->next_avail_channel];
-        write_log("next_avail_channel = %d\n", channel_mgmt->next_avail_channel);
+        // write_log("next_avail_channel = %d\n", channel_mgmt->next_avail_channel);
         // fflush(NULL);
         // Assign flexible channels
         line->channel_list[j] = channel_mgmt->next_avail_channel;
@@ -362,7 +363,7 @@ static struct line* create_line(struct ssd *ssd, int channels, int luns){
             // Assign flexible blocks
             line->block_list[j][k] = block_num->block_num;
             line->pgs_per_line += spp->pgs_per_blk;
-            write_log("channel = %d, lun = %d, block = %d\n", channel_mgmt->next_avail_channel, lun_mgmt->next_avail_lun, block_num->block_num);
+            // write_log("channel = %d, lun = %d, block = %d\n", channel_mgmt->next_avail_channel, lun_mgmt->next_avail_lun, block_num->block_num);
             // fflush(NULL);
             g_free(block_num);
             lun_mgmt->next_avail_lun = (lun_mgmt->next_avail_lun + 1) % spp->luns_per_ch;
@@ -370,14 +371,14 @@ static struct line* create_line(struct ssd *ssd, int channels, int luns){
         channel_mgmt->next_avail_channel = (channel_mgmt->next_avail_channel + 1) % spp->nchs;
     }
     channel_mgmt->next_line_id++;
-    write_log("Rechecking line info: \n");
-    for (i = 0; i < line->total_channels; i++){
-        for (j = 0; j < line->total_luns[i]; j++){
-            write_log("channel: %d, lun: %d, block: %d\n", line->channel_list[i], line->lun_list[i][j], line->block_list[i][j]);
-        }
-    }
+    // write_log("Rechecking line info: \n");
+    // for (i = 0; i < line->total_channels; i++){
+    //     for (j = 0; j < line->total_luns[i]; j++){
+    //         write_log("channel: %d, lun: %d, block: %d\n", line->channel_list[i], line->lun_list[i][j], line->block_list[i][j]);
+    //     }
+    // }
 
-    write_log("---Creating line with %d channels and %d luns end---\n", channels, luns);
+    // write_log("---Creating line with %d channels and %d luns end---\n", channels, luns);
     // fflush(NULL);
     return line;
 }
@@ -502,15 +503,17 @@ static void ssd_init_write_pointer(struct ssd *ssd, uint8_t streams)
     write_log("ssd_init_write_pointer start\n");
     // fflush(NULL);
     struct ssdparams *spp = &ssd->sp;
+    spp->real_num_streams = streams + 2;
     // n streams -> n+2 write pointers since we need stream 0 as default stream and stream n+1 as GC stream.
-    ssd->wp = g_malloc0(sizeof(struct write_pointer) * (streams + 3));
-    ssd->stream_info = g_malloc0(sizeof(struct stream_info) * (streams + 3));
+    // * 2 for shadow streams 
+    ssd->wp = g_malloc0(sizeof(struct write_pointer) * spp->real_num_streams);
+    ssd->stream_info = g_malloc0(sizeof(struct stream_info) * spp->real_num_streams);
     ssd->seq_info = init_seq_write_info(streams * 4);
     struct write_pointer *wpp = NULL;
     struct stream_info *si = NULL;
     // struct line_mgmt *lm = &ssd->lm;
     struct line *curline = NULL;
-    for (int i = 0; i <= streams + 2; i++){
+    for (int i = 0; i < spp->real_num_streams; i++){
         //curline = QTAILQ_FIRST(&lm->free_line_list);
         curline = create_line(ssd, spp->init_channel_per_line, spp->init_lun_per_channel);
         curline->stream = i; // Initialize stream ID
@@ -536,7 +539,8 @@ static void ssd_init_write_pointer(struct ssd *ssd, uint8_t streams)
         si->sender = false;
         si->receiver = false;
         si->page_counter = 0;
-        si->received_pages = 0;
+        si->request_counter = 0;
+        si->avg_pages_per_request = 0;
     }
     write_log("ssd_init_write_pointer end\n");
     // fflush(NULL);
@@ -547,22 +551,34 @@ static inline void check_addr(int a, int max)
     ftl_assert(a >= 0 && a < max);
 }
 
-static int get_channels_needed(struct ssd *ssd){
+static int get_channels_needed(struct ssd *ssd, int stream){
     struct ssdparams *spp = &ssd->sp;
     return spp->init_channel_per_line;
 }
 
-static int get_luns_needed(struct ssd *ssd){
+static int get_luns_needed(struct ssd *ssd, int stream){
     struct ssdparams *spp = &ssd->sp;
+    struct stream_info *si = &ssd->stream_info[stream];
+    if (si->avg_pages_per_request < 1){
+        return spp->init_lun_per_channel;
+    }else if (si->avg_pages_per_request < 2){
+        return 1;
+    }else if (si->avg_pages_per_request < 4){
+        return 2;
+    }else if (si->avg_pages_per_request < 64){
+        return 4;
+    }else{
+        return 8;
+    }
     return spp->init_lun_per_channel;
 }
 
-static struct line *get_next_free_line(struct ssd *ssd)
+static struct line *get_next_free_line(struct ssd *ssd, int stream)
 {
     // struct line_mgmt *lm = &ssd->lm;
     struct line *curline = NULL;
 
-    curline = create_line(ssd, get_channels_needed(ssd), get_luns_needed(ssd));
+    curline = create_line(ssd, get_channels_needed(ssd, stream), get_luns_needed(ssd, stream));
     if (!curline) {
         ftl_err("No free lines left in [%s] !!!!\n", ssd->ssdname);
         return NULL;
@@ -619,7 +635,7 @@ static void victim_line_assert(struct ssd *ssd, int channel, int lun, struct lin
 */
 static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream, uint64_t lpn)
 {
-    write_log("debug 14.1, stream = %d\n", stream);
+    // write_log("debug 14.1, stream = %d\n", stream);
     // fflush(NULL);
     struct ssdparams *spp = &ssd->sp;
     struct write_pointer *wpp = &ssd->wp[stream];
@@ -750,18 +766,20 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream, uint64_t 
                 si->block_open_time = uptime;
                 si->earliest_death_time = -1; // Max uint64_t
                 si->latest_death_time = 0;
-                si->received_pages = 0;
+                si->avg_pages_per_request = (double)si->page_counter / (double)si->request_counter;
+                si->page_counter = 0;
+                si->request_counter = 0;
                 wpp->curline = NULL;
                 // write_log("debug 14.13\n");
                 // fflush(NULL);
-                wpp->curline = get_next_free_line(ssd);
+                wpp->curline = get_next_free_line(ssd, stream);
                 // write_log("debug 14.14\n");
                 // fflush(NULL);
                 wpp->curline->stream = stream;
                 /* ftl_debug("Stream %d now has line %d,victim=%d,full=%d,free=%d,lpn=%"PRIu64",hostpgs=%"PRIu64",gcpgs=%"PRIu64"\n", stream, wpp->curline->id,
                     ssd->lm.victim_line_cnt, ssd->lm.full_line_cnt,
                     ssd->lm.free_line_cnt, lpn, ssd->pages_from_host, ssd->pages_from_gc);*/
-                //write_log("[4,%d,%d,%d,%d,%d,%"PRIu64",%"PRIu64"]\n", stream, wpp->curline->id, ssd->lm.victim_line_cnt, ssd->lm.full_line_cnt, ssd->lm.free_line_cnt, ssd->pages_from_host, ssd->pages_from_gc);
+                //write_log("[4, %d, %d, %d, %d, %d, %"PRIu64", %"PRIu64"]\n", stream, wpp->curline->id, ssd->lm.victim_line_cnt, ssd->lm.full_line_cnt, ssd->lm.free_line_cnt, ssd->pages_from_host, ssd->pages_from_gc);
                 if (!wpp->curline) {
                     /* TODO */
                     ftl_debug("Failed to get a line\n");
@@ -1331,7 +1349,7 @@ static uint64_t gc_write_page(struct ssd *ssd, struct ppa *old_ppa)
     // since our previous guess of lifetime failed
     // write_log("debug gcwp 3\n");
     // fflush(NULL);
-    new_ppa = get_new_page(ssd, spp->msl + 1);
+    new_ppa = get_new_page(ssd, spp->real_num_streams - 1);
     /* update maptbl */
     // write_log("debug gcwp 4\n");
     // fflush(NULL);
@@ -1346,7 +1364,7 @@ static uint64_t gc_write_page(struct ssd *ssd, struct ppa *old_ppa)
     // write_log("debug gcwp 7\n");
     // fflush(NULL);
     /* need to advance the write pointer here */
-    ssd_advance_write_pointer(ssd, spp->msl + 1, lpn);
+    ssd_advance_write_pointer(ssd, spp->real_num_streams - 1, lpn);
     // write_log("debug gcwp 8\n");
     // fflush(NULL);
     if (ssd->sp.enable_gc_delay) {
@@ -1377,7 +1395,7 @@ static struct line *find_smallest_vpc(struct ssd *ssd, int channel, int lun){
     struct line *line = NULL;
     struct line *temp_line = NULL;
     int min_vpc = 2147483647;
-    write_log("finding smallest vpc for channel %d, lun %d\n", channel, lun);
+    // write_log("finding smallest vpc for channel %d, lun %d\n", channel, lun);
     // fflush(NULL);
     if (QTAILQ_EMPTY(&lm->line_resource[channel][lun].victim_line_list)) {
         return NULL;
@@ -1429,9 +1447,9 @@ static struct line *select_victim_line(struct ssd *ssd, int channel, int lun, bo
     if (!victim_line) {
         return NULL;
     }
-    write_log("gc channel: %d, lun: %d, min_vpc: %d\n", channel, lun, victim_line->vpc);
+    // write_log("gc channel: %d, lun: %d, min_vpc: %d\n", channel, lun, victim_line->vpc);
     if (!force && victim_line->ipc < victim_line->pgs_per_line / 8) {
-        write_log("Did not get to threshold, skip\n");
+        // write_log("Did not get to threshold, skip\n");
         return NULL;
     }
 
@@ -1603,7 +1621,7 @@ static int do_gc(struct ssd *ssd, bool force)
             }
             dump_valid_distribution(ssd);
             // Line ID, Invalid count, Victim line count, Full line count, Free line count
-            //write_log("[3,%d,%d,%d,%d,%d]\n", victim_line->id, victim_line->ipc, ssd->lm.victim_line_cnt, ssd->lm.full_line_cnt, ssd->lm.free_line_cnt);
+            write_log("[3, %d, %d, %d, %d, %d]\n", victim_line->id, victim_line->ipc, victim_line->vpc, victim_line->total_channels, victim_line->total_luns);
 
             /* copy back valid data */
             for (ch = 0; ch < victim_line->total_channels; ch++) {
@@ -1700,9 +1718,9 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
     bool stream = control & NVME_RW_DTYPE_STREAMS;
     uint64_t page_death_time = 0;
     uint64_t passed_epoch_since_start = get_passed_epoch_since_start(ssd);
-    uint64_t uptime = get_uptime(ssd);
+    // uint64_t uptime = get_uptime(ssd);
     struct stream_info *si;
-    struct stream_info *cmp_si;
+    // struct stream_info *cmp_si;
     uint16_t dspec = (dsmgmt >> 16) & 0xFFFF; //Stream ID
     // write_log("debug 2\n");
     // fflush(NULL);
@@ -1736,15 +1754,12 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
     uint64_t prediction;
     // write_log("debug 4\n");
     // fflush(NULL);
-    uint64_t prev_starter = start_lpn;
+    // uint64_t prev_starter = start_lpn;
     int stream_choice = 0;
-    int last_step_stream_choice = -1;
-    int old_stream_choice = 0;
-    int last_step_old_stream_choice = -1;
     int i;
     int r;
-    double stream_min_lifetime;
-    double cur_stream_max_lifetime;
+    // double stream_min_lifetime;
+    // double cur_stream_max_lifetime;
     //write_log("++++Write start LPN: %"PRIu64", end LPN: %"PRIu64", given stream: %d, now start++++\n", start_lpn, end_lpn, dspec);
 
     ////write_log("%s, opcode:%#x, start_sec:%#lx, size:%#lx, streamenabled:%d, dspec:%#x\n", __func__, rw->opcode, start_lpn * ssd->sp.secs_per_pg, (end_lpn - start_lpn + 1) * ssd->sp.secsz * ssd->sp.secs_per_pg, stream, dspec);
@@ -1772,6 +1787,118 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
     // fflush(NULL);
     // DZ End
 
+    if (dspec > 0){
+        stream_choice = dspec;
+    } else if (spp->death_time_prediction){
+        stream_choice = 0;
+        chunk = lpn_to_chunk(start_lpn, n->pages_per_chunk);
+        if (ssd->death_time_list[chunk].last_access_op != INITIAL_OP && ssd->death_time_list[chunk].last_access_op != WRITE_ONCE_OP){
+            prediction = ssd->death_time_list[chunk].death_time_avg;
+            page_death_time = passed_epoch_since_start + prediction;
+            // Stream should have exponential accepted range
+            // e.g. stream 1: DT b/t 0~1
+            //      stream 2: DT b/t 1~3
+            //      stream 3: DT b/t 3~7
+            for (i = 0; i < spp->msl; i++){
+                prediction >>= 1;
+                stream_choice += 1;
+                if (prediction == 0){
+                    break;
+                }
+            }
+
+            // If lifetime is too long, and we cannot handle them,
+            // then give this to default stream
+            if (prediction > 0){
+                stream_choice = 0;
+            }
+            // si = &ssd->stream_info[stream_choice];
+            // Stream redirection could not work due to pgs_per_line issue in splitting channels
+            // if (spp->enable_stream_redirect){
+            //     prediction = ssd->death_time_list[chunk].death_time_avg;
+            //     if (stream_choice > 0){
+            //         // Check if there is another write pointer we can redirect this page to
+            //         // Also, if this stream has received something from some other stream, then we don't redirect anything from this stream to other streams
+            //         // AKA receiver should not send redirects
+            //         si->page_counter++;
+            //         if (si->page_counter == spp->pgs_per_line){
+                        
+            //             write_log("\n\n=-=-=\n");
+            //             write_log("Update stream %d incoming interval: \n", stream_choice);
+            //             write_log("Old interval: %.15f\n", si->avg_incoming_interval);
+            //             write_log("Passed time: %"PRIu64"\n", (uptime - si->stream_counter_start_time));
+            //             si->avg_temp_incoming_interval = ((double)(uptime - si->stream_counter_start_time) / (double)(si->page_counter));
+            //             if (si->full_before){
+            //                 si->avg_incoming_interval = si->avg_incoming_interval * (double)(1 - DECAY) + ((double)(uptime - si->stream_counter_start_time) / (double)(si->page_counter)) * (double)DECAY;
+            //             }else{
+            //                 write_log("Stream %d first reach line\n", stream_choice);
+            //                 si->avg_incoming_interval = ((double)(uptime - si->stream_counter_start_time) / (double)(si->page_counter));
+            //                 //write_log("Stream %d new avg full interval: %"PRIu64"\n", stream, si->avg_incoming_interval);
+            //                 si->full_before = true;
+            //             }
+                        
+            //             write_log("New interval: %.15f\n", si->avg_incoming_interval);
+            //             write_log("=+=+=\n\n");
+                        
+            //             si->page_counter = 0;
+            //             si->stream_counter_start_time = uptime;
+            //         }
+
+            //         // if (si->full_before){
+            //         //     si->avg_incoming_interval = si->avg_incoming_interval * (double)(1 - DECAY) + ((double)(uptime - si->stream_counter_start_time)) * (double)DECAY;
+            //         // }else{
+            //         //     si->avg_incoming_interval = ((double)(uptime - si->stream_counter_start_time));
+            //         //     si->full_before = true;
+            //         // }
+            //         // si->stream_counter_start_time = uptime;
+
+            //         stream_min_lifetime = pow(2, stream_choice) * spp->access_interval_precision;
+            //         // Check if L < (P - 1) * V_i
+            //         if (si->full_before && si->receiver == false && stream_min_lifetime < (spp->pgs_per_line - 1) * si->avg_incoming_interval && stream_min_lifetime < (spp->pgs_per_line - 1) * si->avg_temp_incoming_interval){
+            //             // Only redirect if we have previous interval info about this incoming stream
+            //             for (i = 2; i <= spp->msl; i++){
+            //                 cmp_si = &ssd->stream_info[i];
+            //                 // Do not redirect if target has higher freq than source stream
+            //                 if (cmp_si->full_before == false){
+            //                     continue;
+            //                 }
+            //                 if (i == stream_choice || cmp_si->sender){
+            //                     continue;
+            //                 }
+            //                 cur_stream_max_lifetime = (pow(2, i - 1)) * spp->access_interval_precision;
+            //                 // Check if L > (P - 1) * V_i && L > age of current stream i stream_counter_start_time
+            //                 if (cur_stream_max_lifetime > (spp->pgs_per_line - 1) * cmp_si->avg_incoming_interval && cur_stream_max_lifetime > (uptime - cmp_si->stream_counter_start_time)){
+            //                     // The target must have L > (P - 1) * V_i, goes here
+            //                     if (page_death_time >= cmp_si->earliest_death_time && page_death_time <= cmp_si->latest_death_time){
+            //                         // Redirect
+            //                         // write_log("Current time: %"PRIu64", Page lifetime prediction: %"PRIu64", deathtime prediction: %"PRIu64",\nredirected from stream %d (T_e = %"PRIu64", T_l = %"PRIu64", T_o = %"PRIu64") to %d (T_e = %"PRIu64", T_l = %"PRIu64", T_o = %"PRIu64").\n\n", passed_epoch_since_start, prediction, page_death_time, stream_choice, si->earliest_death_time, si->latest_death_time, si->stream_counter_start_time, i, cmp_si->earliest_death_time, cmp_si->latest_death_time, cmp_si->stream_counter_start_time);
+            //                         stream_choice = i;
+            //                         si->sender = true;
+            //                         cmp_si->receiver = true;
+            //                         cmp_si->page_counter++;
+            //                         break;
+            //                     }
+            //                 }
+            //             }
+            //         }
+            //     }
+            // }
+            //write_log("Addr: %"PRIu64", Chunk: %"PRIu64", Avg Life: %d, Assigned to stream: %d.\n", lpn, chunk, ssd->death_time_list[chunk].death_time_avg, stream_choice);
+        }else if(ssd->death_time_list[chunk].last_access_op == WRITE_ONCE_OP){
+            stream_choice = 0;
+            //write_log("Addr: %"PRIu64", Chunk: %"PRIu64", First time written, no DT info, assigned to stream 0.\n", lpn, chunk);
+        }
+    }
+
+    si = &ssd->stream_info[stream_choice];
+    // stream_choice += (spp->msl + 1) if request is small (i.e.: 4k)
+    if (start_lpn == end_lpn){
+        stream_choice = stream_choice + (spp->msl + 1);
+    }
+    si->page_counter += (end_lpn - start_lpn) + 1;
+    si->request_counter++;
+
+
     for (lpn = start_lpn; lpn <= end_lpn; lpn++) {
         // write_log("debug 8.1\n");
         // fflush(NULL);
@@ -1789,133 +1916,6 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
         }
         // write_log("debug 8.5\n");
         // fflush(NULL);
-        if (dspec > 0){
-            stream_choice = dspec;
-            old_stream_choice = dspec;
-        }else if (spp->death_time_prediction){
-            stream_choice = 0;
-            old_stream_choice = 0;
-            chunk = lpn_to_chunk(lpn, n->pages_per_chunk);
-            if (ssd->death_time_list[chunk].last_access_op != INITIAL_OP && ssd->death_time_list[chunk].last_access_op != WRITE_ONCE_OP){
-                prediction = ssd->death_time_list[chunk].death_time_avg;
-                page_death_time = passed_epoch_since_start + prediction;
-                // Stream should have exponential accepted range
-                // e.g. stream 1: DT b/t 0~1
-                //      stream 2: DT b/t 1~3
-                //      stream 3: DT b/t 3~7
-                for (i = 0; i < spp->msl; i++){
-                    prediction >>= 1;
-                    stream_choice += 1;
-                    if (prediction == 0){
-                        break;
-                    }
-                }
-
-                // If lifetime is too long, and we cannot handle them,
-                // then give this to default stream
-                if (prediction > 0){
-                    stream_choice = 0;
-                }
-                old_stream_choice = stream_choice;
-                si = &ssd->stream_info[stream_choice];
-                // Stream redirection could not work due to pgs_per_line issue in splitting channels
-                if (spp->enable_stream_redirect){
-                    prediction = ssd->death_time_list[chunk].death_time_avg;
-                    if (stream_choice > 0){
-                        // Check if there is another write pointer we can redirect this page to
-                        // Also, if this stream has received something from some other stream, then we don't redirect anything from this stream to other streams
-                        // AKA receiver should not send redirects
-                        si->page_counter++;
-                        if (si->page_counter == spp->pgs_per_line){
-                            
-                            write_log("\n\n=-=-=\n");
-                            write_log("Update stream %d incoming interval: \n", stream_choice);
-                            write_log("Old interval: %.15f\n", si->avg_incoming_interval);
-                            write_log("Passed time: %"PRIu64"\n", (uptime - si->stream_counter_start_time));
-                            si->avg_temp_incoming_interval = ((double)(uptime - si->stream_counter_start_time) / (double)(si->page_counter));
-                            if (si->full_before){
-                                si->avg_incoming_interval = si->avg_incoming_interval * (double)(1 - DECAY) + ((double)(uptime - si->stream_counter_start_time) / (double)(si->page_counter)) * (double)DECAY;
-                            }else{
-                                write_log("Stream %d first reach line\n", stream_choice);
-                                si->avg_incoming_interval = ((double)(uptime - si->stream_counter_start_time) / (double)(si->page_counter));
-                                //write_log("Stream %d new avg full interval: %"PRIu64"\n", stream, si->avg_incoming_interval);
-                                si->full_before = true;
-                            }
-                            
-                            write_log("New interval: %.15f\n", si->avg_incoming_interval);
-                            write_log("=+=+=\n\n");
-                            
-                            si->page_counter = 0;
-                            si->stream_counter_start_time = uptime;
-                        }
-
-                        // if (si->full_before){
-                        //     si->avg_incoming_interval = si->avg_incoming_interval * (double)(1 - DECAY) + ((double)(uptime - si->stream_counter_start_time)) * (double)DECAY;
-                        // }else{
-                        //     si->avg_incoming_interval = ((double)(uptime - si->stream_counter_start_time));
-                        //     si->full_before = true;
-                        // }
-                        // si->stream_counter_start_time = uptime;
-
-                        stream_min_lifetime = pow(2, stream_choice) * spp->access_interval_precision;
-                        // Check if L < (P - 1) * V_i
-                        if (si->full_before && si->receiver == false && stream_min_lifetime < (spp->pgs_per_line - 1) * si->avg_incoming_interval && stream_min_lifetime < (spp->pgs_per_line - 1) * si->avg_temp_incoming_interval){
-                            // Only redirect if we have previous interval info about this incoming stream
-                            for (i = 2; i <= spp->msl; i++){
-                                cmp_si = &ssd->stream_info[i];
-                                // Do not redirect if target has higher freq than source stream
-                                if (cmp_si->full_before == false){
-                                    continue;
-                                }
-                                if (i == stream_choice || cmp_si->sender){
-                                    continue;
-                                }
-                                cur_stream_max_lifetime = (pow(2, i - 1)) * spp->access_interval_precision;
-                                // Check if L > (P - 1) * V_i && L > age of current stream i stream_counter_start_time
-                                if (cur_stream_max_lifetime > (spp->pgs_per_line - 1) * cmp_si->avg_incoming_interval && cur_stream_max_lifetime > (uptime - cmp_si->stream_counter_start_time)){
-                                    // The target must have L > (P - 1) * V_i, goes here
-                                    if (page_death_time >= cmp_si->earliest_death_time && page_death_time <= cmp_si->latest_death_time){
-                                        // Redirect
-                                        // write_log("Current time: %"PRIu64", Page lifetime prediction: %"PRIu64", deathtime prediction: %"PRIu64",\nredirected from stream %d (T_e = %"PRIu64", T_l = %"PRIu64", T_o = %"PRIu64") to %d (T_e = %"PRIu64", T_l = %"PRIu64", T_o = %"PRIu64").\n\n", passed_epoch_since_start, prediction, page_death_time, stream_choice, si->earliest_death_time, si->latest_death_time, si->stream_counter_start_time, i, cmp_si->earliest_death_time, cmp_si->latest_death_time, cmp_si->stream_counter_start_time);
-                                        stream_choice = i;
-                                        si->sender = true;
-                                        cmp_si->receiver = true;
-                                        cmp_si->received_pages++;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                // TODO: stream_choice = (spp->msl + 2) if request is small (i.e.: 4k)
-                if (start_lpn == end_lpn){
-                    stream_choice = spp->msl + 2;
-                    old_stream_choice = spp->msl + 2;
-                }
-                //write_log("Addr: %"PRIu64", Chunk: %"PRIu64", Avg Life: %d, Assigned to stream: %d.\n", lpn, chunk, ssd->death_time_list[chunk].death_time_avg, stream_choice);
-            }else if(ssd->death_time_list[chunk].last_access_op == WRITE_ONCE_OP){
-                stream_choice = 0;
-                old_stream_choice = 0;
-                //write_log("Addr: %"PRIu64", Chunk: %"PRIu64", First time written, no DT info, assigned to stream 0.\n", lpn, chunk);
-            }
-        }
-
-        if (lpn == start_lpn){
-            last_step_stream_choice = stream_choice;
-            last_step_old_stream_choice = old_stream_choice;
-        }
-        // write_log("debug 9\n");
-        // fflush(NULL);
-        if (stream_choice != last_step_stream_choice || old_stream_choice != last_step_old_stream_choice){
-            write_log("[1, %"PRIu64", %"PRIu64", %d, %d, 0]\n", prev_starter, lpn - 1, last_step_old_stream_choice, last_step_stream_choice);
-            // fflush(NULL);
-            prev_starter = lpn;
-        }
-
-        last_step_stream_choice = stream_choice;
-        last_step_old_stream_choice = old_stream_choice;
-        si = &ssd->stream_info[stream_choice];
         // Update the write pointer earliest/latest death time for the target block
         if (page_death_time < si->earliest_death_time){
             si->earliest_death_time = page_death_time;
@@ -1954,7 +1954,7 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
         // write_log("debug 16\n");
         // fflush(NULL);
     }
-    write_log("[1, %"PRIu64", %"PRIu64", %d, %d, 1]\n", prev_starter, end_lpn, old_stream_choice, stream_choice);
+    write_log("[1, %"PRIu64", %"PRIu64", %d]\n", start_lpn, end_lpn, stream_choice);
     // write_log("debug 17\n");
     // fflush(NULL);
     //write_log("----Write start LPN: %"PRIu64", end LPN: %"PRIu64", given stream: %d, now end----\n", start_lpn, end_lpn, dspec);
