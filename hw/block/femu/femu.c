@@ -691,6 +691,7 @@ static Property femu_props[] = {
     DEFINE_PROP_UINT32("init_channel_per_line", FemuCtrl, init_channel_per_line, 8),
     DEFINE_PROP_UINT32("init_lun_per_channel", FemuCtrl, init_lun_per_channel, 8),
     DEFINE_PROP_UINT32("init_blk_per_plane", FemuCtrl, init_blk_per_plane, 1),
+    DEFINE_PROP_BOOL("enable_hetero_sbsize", FemuCtrl, enable_hetero_sbsize, false),
     DEFINE_PROP_END_OF_LIST(),
 };
 

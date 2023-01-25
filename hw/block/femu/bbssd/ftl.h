@@ -209,6 +209,13 @@ struct ssdparams {
     uint32_t access_interval_precision;
 
     int real_num_streams;
+    int gc_stream_id;
+    bool enable_hetero_sbsize;
+
+    int gc_start_channel;
+    int gc_start_lun;
+
+    int max_allow_gc_lines;
 };
 
 typedef struct line {
@@ -266,6 +273,7 @@ struct stream_info {
     uint64_t stream_counter_start_time;
     uint64_t page_counter;
     uint64_t request_counter;
+    uint64_t next_avail_time;
     double avg_pages_per_request;
 
     int received_pages;
