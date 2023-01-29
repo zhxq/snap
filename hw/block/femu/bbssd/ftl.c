@@ -543,9 +543,6 @@ static void ssd_init_write_pointer(struct ssd *ssd, uint8_t streams)
         si->full_before = false;
         si->sender = false;
         si->receiver = false;
-        si->page_counter = 0;
-        si->request_counter = 0;
-        si->avg_pages_per_request = 0;
         si->next_avail_time = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
     }
     write_log("ssd_init_write_pointer end\n");
@@ -571,9 +568,9 @@ static int get_luns_needed(struct ssd *ssd, int stream){
         if (stream % 4 == 0){
             return 1;
         }else if(stream % 4 == 1){
-            return 2;
+            return 1;
         }else if (stream % 4 == 2){
-            return 4;
+            return 8;
         }else{
             return 8;
         }
@@ -774,9 +771,6 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream, uint64_t 
                 si->block_open_time = uptime;
                 si->earliest_death_time = -1; // Max uint64_t
                 si->latest_death_time = 0;
-                si->avg_pages_per_request = (double)si->page_counter / (double)si->request_counter;
-                si->page_counter = 0;
-                si->request_counter = 0;
                 si->next_avail_time = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
                 wpp->curline = NULL;
                 // write_log("debug 14.13\n");
@@ -1824,23 +1818,27 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
         stream_choice *= 4;
         if (pages_written < 8){
             offset = 0;
+            for (i = offset; i < 2; i++){
+                offset = i;
+                si = &ssd->stream_info[stream_choice + i];
+                if (ts > si->next_avail_time){
+                    break;
+                }
+            }
         }else{
             offset = 2;
-        }
-        for (i = offset; i < 4; i++){
-            offset = i;
-            si = &ssd->stream_info[stream_choice + i];
-            if (ts > si->next_avail_time){
-                break;
+            for (i = offset; i < 4; i++){
+                offset = i;
+                si = &ssd->stream_info[stream_choice + i];
+                if (ts > si->next_avail_time){
+                    break;
+                }
             }
         }
-        
         stream_choice += offset;
     }
 
     si = &ssd->stream_info[stream_choice];
-    si->page_counter += pages_written;
-    si->request_counter++;
 
     for (lpn = start_lpn; lpn <= end_lpn; lpn++) {
         // write_log("debug 8.1\n");

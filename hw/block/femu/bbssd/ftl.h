@@ -271,12 +271,8 @@ struct stream_info {
     double avg_incoming_interval;
     double avg_temp_incoming_interval;
     uint64_t stream_counter_start_time;
-    uint64_t page_counter;
-    uint64_t request_counter;
     uint64_t next_avail_time;
     double avg_pages_per_request;
-
-    int received_pages;
 };
 
 struct line_resource_mgmt{
