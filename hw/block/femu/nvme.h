@@ -1379,8 +1379,8 @@ typedef struct FemuCtrl {
     bool            enable_hashing;
     bool            enable_stream_redirect;
     uint32_t        channel_split_exp;
-    uint32_t        init_channel_per_line;
-    uint32_t        init_lun_per_channel;
+    uint32_t        default_channels_per_line;
+    uint32_t        default_luns_per_channel;
     // uint32_t        plane_per_channel;
     uint32_t        init_blk_per_plane;
     bool            enable_hetero_sbsize;

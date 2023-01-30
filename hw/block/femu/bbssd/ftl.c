@@ -27,6 +27,26 @@ static void *ftl_thread(void *arg);
 //     line->curlun = curlun;
 // }
 
+static int get_channels_needed(struct ssd *ssd, int stream){
+    struct ssdparams *spp = &ssd->sp;
+    return spp->default_channels_per_line;
+}
+
+static int get_luns_needed(struct ssd *ssd, int stream){
+    struct ssdparams *spp = &ssd->sp;
+    if (spp->enable_hetero_sbsize){
+        if (stream == spp->gc_stream_id){
+            return spp->luns_per_ch;
+        }
+        if (stream % 2 == 0){
+            return 1;
+        }else{
+            return spp->default_luns_per_channel;
+        }
+    }
+    return spp->default_luns_per_channel;
+}
+
 static bool should_gc_channel_lun(struct ssd *ssd, int channel, int lun, bool high){
     struct ssdparams *spp = &ssd->sp;
     if (ssd->channel_mgmt.channel[channel].lun[lun].free_blocks_cnt < (high ? spp->gc_thres_blocks_high : spp->gc_thres_blocks)){
@@ -297,30 +317,28 @@ static inline void victim_line_set_pri(void *a, pqueue_pri_t pri)
 //     line->pos[line->curchannel][line->curlun] = pos;
 // }
 
-static struct line* create_line(struct ssd *ssd, int channels, int luns){
+static struct line* create_line(struct ssd *ssd, int stream){
     struct ssdparams *spp = &ssd->sp;
     struct line_mgmt *lm = &ssd->lm;
     int i, j, k;
+    int channels = get_channels_needed(ssd, stream);
+    int luns = get_luns_needed(ssd, stream);
     struct line *line = (struct line *)g_malloc0(sizeof(struct line));
     struct channel_mgmt *channel_mgmt = &ssd->channel_mgmt;
     struct lun_mgmt *lun_mgmt;
     struct block_mgmt *block_mgmt;
     struct block_num *block_num;
     line->id = channel_mgmt->next_line_id;
+    write_log("[7, %d, %d, %d]\n", channels, luns, line->id);
     line->ipc = 0;
     line->vpc = 0;
     line->valid = true;
     line->total_channels = channels;
+    line->pgs_per_line = 0;
     line->channel_list = g_malloc0(sizeof(int) * line->total_channels);
-    // write_log("+++Creating line with %d channels and %d luns with id %d start+++\n", channels, luns, line->id);
-    write_log("[7, %d, %d, %d]\n", channels, luns, line->id);
-    // fflush(NULL);
-    //line->start_lun = ((i / (spp->blks_per_lun)) % spp->lun_regions) * spp->init_lun_per_channel;
-    line->total_luns = g_malloc0(sizeof(int*) * line->total_channels);
-    // line->pos = g_malloc0(sizeof(size_t *) * line->total_channels);
+    line->total_luns = g_malloc0(sizeof(int) * line->total_channels);
     line->lun_list = g_malloc0(sizeof(int*) * line->total_channels);
     line->block_list = g_malloc0(sizeof(int*) * line->total_channels);
-    line->pgs_per_line = 0;
     line->full_entry = g_malloc0(sizeof(QTAILQ_ENTRY(line) *) * spp->nchs);
     line->victim_entry = g_malloc0(sizeof(QTAILQ_ENTRY(line) *) * spp->nchs);
     line->inserted_to_full_queue = g_malloc0(sizeof(bool*) * spp->nchs);
@@ -345,12 +363,10 @@ static struct line* create_line(struct ssd *ssd, int channels, int luns){
         line->channel_list[j] = channel_mgmt->next_avail_channel;
         // Assign flexible LUNs
         line->total_luns[j] = luns;
-        // line->pos[j] = g_malloc0(sizeof(size_t) * line->total_luns[j]);
         
         line->lun_list[j] = g_malloc0(sizeof(int) * line->total_luns[j]);
         line->block_list[j] = g_malloc0(sizeof(int) * line->total_luns[j]);
         for (k = 0; k < line->total_luns[j]; k++){
-            // line->pos[j][k] = 0;
             block_mgmt = &lun_mgmt->lun[lun_mgmt->next_avail_lun];
             if (block_mgmt->free_blocks_cnt == 0){
                 continue;
@@ -363,26 +379,12 @@ static struct line* create_line(struct ssd *ssd, int channels, int luns){
             // Assign flexible blocks
             line->block_list[j][k] = block_num->block_num;
             line->pgs_per_line += spp->pgs_per_blk;
-            // write_log("channel = %d, lun = %d, block = %d\n", channel_mgmt->next_avail_channel, lun_mgmt->next_avail_lun, block_num->block_num);
-            // fflush(NULL);
             g_free(block_num);
             lun_mgmt->next_avail_lun = (lun_mgmt->next_avail_lun + 1) % spp->luns_per_ch;
         }
         channel_mgmt->next_avail_channel = (channel_mgmt->next_avail_channel + 1) % spp->nchs;
     }
     channel_mgmt->next_line_id++;
-    // write_log("Rechecking line info: \n");
-    // for (i = 0; i < line->total_channels; i++){
-    //     for (j = 0; j < line->total_luns[i]; j++){
-    //         write_log("channel: %d, lun: %d, block: %d\n", line->channel_list[i], line->lun_list[i][j], line->block_list[i][j]);
-    //     }
-    // }
-
-    // write_log("---Creating line with %d channels and %d luns end---\n", channels, luns);
-    // fflush(NULL);
-    // if (should_gc(ssd)){
-    //     spp->max_allow_gc_lines++;
-    // }
     return line;
 }
 
@@ -410,9 +412,6 @@ static void ssd_init_lines(struct ssd *ssd)
         lun_mgmt->lun = g_malloc0(sizeof(struct block_mgmt) * spp->luns_per_ch);
         for (j = 0; j < spp->luns_per_ch; j++){
             QTAILQ_INIT(&lm->line_resource[i][j].free_line_list);
-            // lm->line_resource[i][j].victim_line_pq = pqueue_init(spp->tt_lines, victim_line_cmp_pri,
-            //         victim_line_get_pri, victim_line_set_pri,
-            //         victim_line_get_pos, victim_line_set_pos);
             QTAILQ_INIT(&lm->line_resource[i][j].full_line_list);
             QTAILQ_INIT(&lm->line_resource[i][j].victim_line_list);
             lm->line_resource[i][j].free_line_cnt = 0;
@@ -440,64 +439,6 @@ static void ssd_init_lines(struct ssd *ssd)
             }
         }
     }
-    /*
-    for (i = 0; i < lm->tt_lines; i++) {
-        line = &lm->lines[i];
-        line->id = i;
-        line->ipc = 0;
-        line->vpc = 0;
-        line->pos = 0;
-
-        if (i < spp->blks_per_lun){
-            lm->channel_lines[i] = g_malloc0(sizeof(struct line**) * spp->nchs);
-            for (j = 0; j < spp->nchs; j++){
-                lm->channel_lines[i][j] = NULL;
-            }
-        }
-        
-        line->start_channel = i / (spp->blks_per_lun) / spp->lun_regions * spp->init_channel_per_line;
-        line->total_channels = spp->init_channel_per_line;
-        line->channel_list = g_malloc0(sizeof(int) * line->total_channels);
-        line->start_lun = ((i / (spp->blks_per_lun)) % spp->lun_regions) * spp->init_lun_per_channel;
-        line->total_luns = g_malloc0(sizeof(int*) * line->total_channels);
-        line->lun_list = g_malloc0(sizeof(int*) * line->total_channels);
-        line->block_list = g_malloc0(sizeof(int*) * line->total_channels);
-        line->pgs_per_line = 0;
-        for (j = 0; j < line->total_channels; j++){
-            if (lm->channel_lines[i % spp->blks_per_lun][j + line->start_channel] == NULL){
-                lm->channel_lines[i % spp->blks_per_lun][j + line->start_channel] = g_malloc0(sizeof(struct line*) * spp->luns_per_ch);
-            }
-            // Assign flexible channels
-            line->channel_list[j] = j + line->start_channel;
-            // Assign flexible LUNs
-            line->total_luns[j] = spp->init_lun_per_channel;
-            line->lun_list[j] = g_malloc0(sizeof(int) * line->total_luns[j]);
-            line->block_list[j] = g_malloc0(sizeof(int) * line->total_luns[j]);
-            for (k = 0; k < line->total_luns[j]; k++){
-                lm->channel_lines[i % spp->blks_per_lun][j + line->start_channel][line->start_lun + k] = line;
-                line->lun_list[j][k] = line->start_lun + k;
-                // Assign flexible blocks
-                line->block_list[j][k] = i % spp->blks_per_lun;
-                line->pgs_per_line += spp->pgs_per_blk;
-            }
-        }
-    }
-    */
-    // Interleave different channels
-    // for (i = 0; i < spp->blks_per_lun; i++){
-    //     for (j = 0; j < spp->nchs; j += spp->init_channel_per_line){
-    //         for (k = 0; k < spp->luns_per_ch; k += spp->init_lun_per_channel){
-    //             line = lm->channel_lines[i][j][k];
-    //             write_log("i: %d, j: %d, k: %d, line_id: %d, blk: %d, start_channel: %d, start_lun: %d\n", i, j, k, line->id, line->id % spp->blks_per_lun, line->start_channel, line->start_lun);
-    //             // fflush(NULL);
-    //             /* initialize all the lines as free lines */
-    //             line->use = USE_FREE;
-    //             QTAILQ_INSERT_TAIL(&lm->free_line_list, line, entry);
-    //             lm->free_line_cnt++;
-    //         }
-    //     }
-    // }
-    // ftl_assert(lm->free_line_cnt == lm->tt_lines);
     write_log("ssd_init_lines end\n");
     // fflush(NULL);
 }
@@ -507,7 +448,7 @@ static void ssd_init_write_pointer(struct ssd *ssd, uint8_t streams)
     write_log("ssd_init_write_pointer start\n");
     // fflush(NULL);
     struct ssdparams *spp = &ssd->sp;
-    spp->real_num_streams = streams + 4 + 1; // 1 for gc, 4 for stream 0 (8/1, 8/2, 8/4, 8/8)
+    spp->real_num_streams = streams + 2 + 1; // 1 for gc, 2 for the default stream (8/1, 8/8 or maybe 8/4)
     spp->gc_stream_id = spp->real_num_streams - 1;
     // n streams -> n+2 write pointers since we need stream 0 as default stream and stream n+1 as GC stream.
     // * 2 for shadow streams 
@@ -520,7 +461,7 @@ static void ssd_init_write_pointer(struct ssd *ssd, uint8_t streams)
     struct line *curline = NULL;
     for (int i = 0; i < spp->real_num_streams; i++){
         //curline = QTAILQ_FIRST(&lm->free_line_list);
-        curline = create_line(ssd, spp->init_channel_per_line, spp->init_lun_per_channel);
+        curline = create_line(ssd, i);
         curline->stream = i; // Initialize stream ID
         curline->use = USE_INUSE;
         // QTAILQ_REMOVE(&lm->free_line_list, curline, entry);
@@ -554,90 +495,21 @@ static inline void check_addr(int a, int max)
     ftl_assert(a >= 0 && a < max);
 }
 
-static int get_channels_needed(struct ssd *ssd, int stream){
-    struct ssdparams *spp = &ssd->sp;
-    return spp->init_channel_per_line;
-}
-
-static int get_luns_needed(struct ssd *ssd, int stream){
-    struct ssdparams *spp = &ssd->sp;
-    if (spp->enable_hetero_sbsize){
-        if (stream == spp->gc_stream_id){
-            return spp->luns_per_ch;
-        }
-        if (stream % 4 == 0){
-            return 1;
-        }else if(stream % 4 == 1){
-            return 1;
-        }else if (stream % 4 == 2){
-            return 8;
-        }else{
-            return 8;
-        }
-    }
-    return spp->init_lun_per_channel;
-}
-
 static struct line *get_next_free_line(struct ssd *ssd, int stream)
 {
     // struct line_mgmt *lm = &ssd->lm;
     struct line *curline = NULL;
 
-    curline = create_line(ssd, get_channels_needed(ssd, stream), get_luns_needed(ssd, stream));
+    curline = create_line(ssd, stream);
     if (!curline) {
         ftl_err("No free lines left in [%s] !!!!\n", ssd->ssdname);
         return NULL;
     }
 
-    // QTAILQ_REMOVE(&lm->free_line_list, curline, entry);
-    // lm->free_line_cnt--;
     curline->use = USE_INUSE;
     return curline;
 }
 
-/*
-static int dump_victim_line_print(struct ssd *ssd, int channel, int lun, bool reverse, bool print){
-    struct line_mgmt *lm = &ssd->lm;
-    struct line *temp_line = NULL;
-    int num = 0;
-    if (!reverse){
-        if (print) write_log("sequential dump channel %d, lun %d\n", channel, lun);
-        QTAILQ_FOREACH(temp_line, &lm->line_resource[channel][lun].victim_line_list, victim_entry[channel][lun]){
-            if (print) write_log("%d\n", temp_line->id);
-            num++;
-        }
-    }else{
-        if (print) write_log("reverse dump channel %d, lun %d\n", channel, lun);
-        QTAILQ_FOREACH_REVERSE(temp_line, &lm->line_resource[channel][lun].victim_line_list, victim_entry[channel][lun]){
-            if (print) write_log("%d\n", temp_line->id);
-            num++;
-        }
-    }
-    if (print) write_log("Dump finished\n");
-    if (print) fflush(NULL);
-    return num;
-}
-
-static int dump_victim_line(struct ssd *ssd, int channel, int lun, bool reverse){
-    return dump_victim_line_print(ssd, channel, lun, reverse, true);
-}
-
-static void victim_line_assert(struct ssd *ssd, int channel, int lun, struct line *line){
-    int seq, rev;
-    struct line_mgmt *lm = &ssd->lm;
-    write_log("asserting line %d\n", line->id);
-    seq = dump_victim_line_print(ssd, channel, lun, false, false);
-    rev = dump_victim_line_print(ssd, channel, lun, true, false);
-    if (seq != rev || lm->line_resource[channel][lun].victim_line_cnt != seq){
-        write_log("Inconsistency: line->id %d, seq %d, rev %d\n", line->id, seq, rev);
-        // fflush(NULL);
-        seq = dump_victim_line(ssd, channel, lun, false);
-        rev = dump_victim_line(ssd, channel, lun, true);
-        ftl_assert(seq == rev);
-        ftl_assert(lm->line_resource[channel][lun].victim_line_cnt);
-    }
-}
-*/
 static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream, uint64_t lpn)
 {
     // write_log("debug 14.1, stream = %d\n", stream);
@@ -707,30 +579,15 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream, uint64_t 
                             // fflush(NULL);
                             
                         } else {
-                            // write_log("debug 14.9\n");
-                            // fflush(NULL);
                             ftl_assert(wpp->curline->vpc >= 0 && wpp->curline->vpc < wpp->curline->pgs_per_line);
                             /* there must be some invalid pages in this line */
                             ftl_assert(wpp->curline->ipc > 0);
-                            // pqueue_change_line_lun(wpp->curline, i, j);
-                            // write_log("debug 14.10, vpc = %d\n", wpp->curline->vpc);
-                            // fflush(NULL);
                             if (wpp->curline->inserted_to_victim_queue[real_channel_no][real_lun_no]){
 
                             }else{
-                                // pqueue_insert(lm->line_resource[real_channel_no][real_lun_no].victim_line_pq, wpp->curline);
-                                // pqueue_print(lm->line_resource[real_channel_no][real_lun_no].victim_line_pq, femu_log_file, victim_line_print);
-                                // write_log("debug 14.11, new pos = %"PRId64"\n", wpp->curline->pos[i][j]);
-                                // fflush(NULL);
-                                // write_log("debug 14.11 put in victim, wpp->curline->id = %d\n", wpp->curline->id);
-                                // fflush(NULL);
-                                // victim_line_assert(ssd, real_channel_no, real_lun_no, wpp->curline);
                                 QTAILQ_INSERT_TAIL(&lm->line_resource[real_channel_no][real_lun_no].victim_line_list, wpp->curline, victim_entry[real_channel_no][real_lun_no]);
                                 wpp->curline->inserted_to_victim_queue[real_channel_no][real_lun_no] = true;
                                 lm->line_resource[real_channel_no][real_lun_no].victim_line_cnt++;
-                                // victim_line_assert(ssd, real_channel_no, real_lun_no, wpp->curline);
-                                // write_log("advance pointer add to victim, victim_line_cnt = %d\n", lm->line_resource[real_channel_no][real_lun_no].victim_line_cnt);
-                                // fflush(NULL);
                             }
                         }
                     }
@@ -738,27 +595,6 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream, uint64_t 
                 /* current line is used up, pick another empty line */
 
                 // DZ Start
-
-                
-                // TODO: Remember to separate the incoming streams and write pointer stream information!!!!
-                // Incoming streams can be separated by their predicted lifetime (use a new data struct!)
-                // Stream Info for blocks should remember its T_o, T_e and T_l
-                /*
-                write_log("+++++\n\n");
-                write_log("Stream %d curblock is full: \n", stream);
-                write_log("Avg incoming interval: %.20fs\n", si->avg_incoming_interval);
-                write_log("Block open time: %"PRIu64"s\n", si->block_open_time);
-                write_log("Block close time: %"PRIu64"s\n", uptime);
-                write_log("Block earliest DT: %"PRIu64" units\n", si->earliest_death_time);
-                write_log("Block latest DT: %"PRIu64" units\n", si->latest_death_time);
-                write_log("Current epoch since start: %"PRIu64" units\n", get_passed_epoch_since_start(ssd));
-                write_log("Transient time starts from: %"PRIu64" units\n", max(get_passed_epoch_since_start(ssd), si->earliest_death_time));
-                write_log("Transient time ends at: %"PRIu64" units\n", si->latest_death_time);
-                write_log("Transient time: %"PRIu64" units\n", si->latest_death_time - max(get_passed_epoch_since_start(ssd), si->earliest_death_time));
-                write_log("-----\n\n");
-                */
-                // write_log("debug 14.12\n");
-                // fflush(NULL);
                 wpp->curline->use = USE_FULL;
                 wpp->curline->close_time = uptime;
                 wpp->curline->stream = stream;
@@ -857,7 +693,7 @@ static void ssd_init_params(struct ssdparams *spp)
     spp->gc_start_channel = 0;
     spp->gc_start_lun = 0;
     //spp->min_channels_per_line = spp->nchs / spp->channel_regions;
-    //spp->min_channels_per_line = spp->init_channel_per_line;
+    //spp->min_channels_per_line = spp->default_channels_per_line;
 
     spp->pg_rd_lat = NAND_READ_LATENCY;
     spp->pg_wr_lat = NAND_PROG_LATENCY;
@@ -884,12 +720,12 @@ static void ssd_init_params(struct ssdparams *spp)
     spp->tt_pls = spp->pls_per_ch * spp->nchs;
 
     spp->tt_luns = spp->luns_per_ch * spp->nchs;
-    ftl_assert(spp->nchs % spp->init_channel_per_line == 0);
-    ftl_assert(spp->luns_per_ch % spp->init_lun_per_channel == 0);
+    ftl_assert(spp->nchs % spp->default_channels_per_line == 0);
+    ftl_assert(spp->luns_per_ch % spp->default_luns_per_channel == 0);
     ftl_assert(spp->blks_per_pl % spp->init_blk_per_plane == 0);
     //spp->channel_regions = (1 << spp->channel_split_exp);
-    spp->channel_regions = spp->nchs / spp->init_channel_per_line;
-    spp->lun_regions = spp->luns_per_ch / spp->init_lun_per_channel;
+    spp->channel_regions = spp->nchs / spp->default_channels_per_line;
+    spp->lun_regions = spp->luns_per_ch / spp->default_luns_per_channel;
     spp->blk_regions = spp->blks_per_pl / spp->init_blk_per_plane;
     /* line is special, put it at the end */
     spp->blks_per_line = spp->tt_luns; /* TODO: to fix under multiplanes */
@@ -1012,8 +848,8 @@ void ssd_init(FemuCtrl *n)
 
     ftl_assert(ssd);
     spp->channel_split_exp = n->channel_split_exp;
-    spp->init_channel_per_line = n->init_channel_per_line;
-    spp->init_lun_per_channel = n->init_lun_per_channel;
+    spp->default_channels_per_line = n->default_channels_per_line;
+    spp->default_luns_per_channel = n->default_luns_per_channel;
     spp->init_blk_per_plane = n->init_blk_per_plane;
     ssd_init_params(spp);
 
@@ -1555,11 +1391,35 @@ static void clean_one_block(struct ssd *ssd, struct ppa *ppa)
 
 static void mark_line_free(struct ssd *ssd, struct ppa *ppa)
 {
-    // struct line_mgmt *lm = &ssd->lm;
+    int i, j;
+    struct ssdparams *spp = &ssd->sp;
     struct line *line = get_line(ssd, ppa);
     line->ipc = 0;
     line->vpc = 0;
     line->use = USE_FREE;
+
+    for (i = 0; i < spp->nchs; i++){
+        g_free(line->full_entry[i]);
+        g_free(line->victim_entry[i]);
+        g_free(line->inserted_to_full_queue[i]);
+        g_free(line->inserted_to_victim_queue[i]);
+    }
+    
+    for (j = 0; j < line->total_channels; j++){
+        g_free(line->lun_list[j]);
+        g_free(line->block_list[j]);
+    }
+
+    g_free(line->full_entry);
+    g_free(line->victim_entry);
+    g_free(line->inserted_to_full_queue);
+    g_free(line->inserted_to_victim_queue);
+    g_free(line->channel_list);
+    g_free(line->lun_list);
+    g_free(line->block_list);
+    g_free(line->total_luns);
+
+    g_free(line);
 }
 
 static void dump_valid_distribution(struct ssd *ssd){
@@ -1759,7 +1619,7 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
     int stream_choice = 0;
     int i;
     int r;
-    uint64_t ts = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+    // uint64_t ts = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
     // double stream_min_lifetime;
     // double cur_stream_max_lifetime;
     //write_log("++++Write start LPN: %"PRIu64", end LPN: %"PRIu64", given stream: %d, now start++++\n", start_lpn, end_lpn, dspec);
@@ -1801,7 +1661,7 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
             // e.g. stream 1: DT b/t 0~1
             //      stream 2: DT b/t 1~3
             //      stream 3: DT b/t 3~7
-            for (i = 0; i < spp->msl / 4; i++){
+            for (i = 0; i < spp->msl / 2; i++){
                 prediction >>= 1;
                 stream_choice += 1;
                 if (prediction == 0){
@@ -1815,25 +1675,11 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
         }
     }
     if (spp->enable_hetero_sbsize){
-        stream_choice *= 4;
+        stream_choice *= 2;
         if (pages_written < 8){
             offset = 0;
-            for (i = offset; i < 2; i++){
-                offset = i;
-                si = &ssd->stream_info[stream_choice + i];
-                if (ts > si->next_avail_time){
-                    break;
-                }
-            }
         }else{
-            offset = 2;
-            for (i = offset; i < 4; i++){
-                offset = i;
-                si = &ssd->stream_info[stream_choice + i];
-                if (ts > si->next_avail_time){
-                    break;
-                }
-            }
+            offset = 1;
         }
         stream_choice += offset;
     }
