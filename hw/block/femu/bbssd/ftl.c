@@ -374,8 +374,8 @@ static struct line* create_line(struct ssd *ssd, int stream){
             block_num = QTAILQ_FIRST(&block_mgmt->free_block_list);
             QTAILQ_REMOVE(&block_mgmt->free_block_list, block_num, entry);
             block_mgmt->free_blocks_cnt--;
-            lm->channel_lines[block_num->block_num][channel_mgmt->next_avail_channel][lun_mgmt->next_avail_lun] = line;
             line->lun_list[j][k] = lun_mgmt->next_avail_lun;
+            lm->channel_lines[block_num->block_num][line->channel_list[j]][line->lun_list[j][k]] = line;
             // Assign flexible blocks
             line->block_list[j][k] = block_num->block_num;
             line->pgs_per_line += spp->pgs_per_blk;
@@ -1055,8 +1055,7 @@ static void mark_page_invalid(struct ssd *ssd, struct ppa *ppa)
     // fflush(NULL);
     /* update corresponding line status */
     line = get_line(ssd, ppa);
-    // victim_line_assert(ssd, 0, 0, line);
-    // victim_line_assert(ssd, 0, 4, line);
+    ftl_assert(line->use != USE_FREE);
     ftl_assert(line->ipc >= 0 && line->ipc < line->pgs_per_line);
     if (line->vpc == line->pgs_per_line) {
         ftl_assert(line->ipc == 0);
@@ -1198,7 +1197,7 @@ static uint64_t gc_write_page(struct ssd *ssd, struct ppa *old_ppa)
     // since our previous guess of lifetime failed
     // write_log("debug gcwp 3\n");
     // fflush(NULL);
-    new_ppa = get_new_page(ssd, spp->real_num_streams - 1);
+    new_ppa = get_new_page(ssd, spp->gc_stream_id);
     /* update maptbl */
     // write_log("debug gcwp 4\n");
     // fflush(NULL);
@@ -1391,35 +1390,37 @@ static void clean_one_block(struct ssd *ssd, struct ppa *ppa)
 
 static void mark_line_free(struct ssd *ssd, struct ppa *ppa)
 {
-    int i, j;
-    struct ssdparams *spp = &ssd->sp;
+    // int i, j;
+    // struct ssdparams *spp = &ssd->sp;
     struct line *line = get_line(ssd, ppa);
     line->ipc = 0;
     line->vpc = 0;
     line->use = USE_FREE;
 
-    for (i = 0; i < spp->nchs; i++){
-        g_free(line->full_entry[i]);
-        g_free(line->victim_entry[i]);
-        g_free(line->inserted_to_full_queue[i]);
-        g_free(line->inserted_to_victim_queue[i]);
-    }
+    // TODO: Should do an appropriate memory free operation on the used lines
+
+    // for (i = 0; i < spp->nchs; i++){
+    //     g_free(line->full_entry[i]);
+    //     g_free(line->victim_entry[i]);
+    //     g_free(line->inserted_to_full_queue[i]);
+    //     g_free(line->inserted_to_victim_queue[i]);
+    // }
     
-    for (j = 0; j < line->total_channels; j++){
-        g_free(line->lun_list[j]);
-        g_free(line->block_list[j]);
-    }
+    // for (j = 0; j < line->total_channels; j++){
+    //     g_free(line->lun_list[j]);
+    //     g_free(line->block_list[j]);
+    // }
 
-    g_free(line->full_entry);
-    g_free(line->victim_entry);
-    g_free(line->inserted_to_full_queue);
-    g_free(line->inserted_to_victim_queue);
-    g_free(line->channel_list);
-    g_free(line->lun_list);
-    g_free(line->block_list);
-    g_free(line->total_luns);
+    // g_free(line->full_entry);
+    // g_free(line->victim_entry);
+    // g_free(line->inserted_to_full_queue);
+    // g_free(line->inserted_to_victim_queue);
+    // g_free(line->channel_list);
+    // g_free(line->lun_list);
+    // g_free(line->block_list);
+    // g_free(line->total_luns);
 
-    g_free(line);
+    // g_free(line);
 }
 
 static void dump_valid_distribution(struct ssd *ssd){
