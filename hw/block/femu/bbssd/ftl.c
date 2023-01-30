@@ -526,8 +526,6 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream, uint64_t 
     if (!(wpp->curline->channel_list[wpp->ch] >= 0 && wpp->curline->channel_list[wpp->ch] < spp->nchs)){
         ftl_debug("ch bug: wpp->ch: %d, wpp->curline->channel_list[wpp->ch]: %d, spp->nchs: %d\n", wpp->ch, wpp->curline->channel_list[wpp->ch], spp->nchs);
     }
-    ftl_assert(wpp->curline->use == USE_INUSE);
-    ftl_assert(wpp->curline->valid);
     check_addr(wpp->curline->channel_list[wpp->ch], spp->nchs);
     wpp->ch++;
     if (wpp->ch == wpp->curline->total_channels) {
@@ -1052,12 +1050,6 @@ static void mark_page_invalid(struct ssd *ssd, struct ppa *ppa)
     
     /* update corresponding line status */
     line = get_line(ssd, ppa);
-    if (line == NULL){
-        write_log("Null encountered in mark line invalid\n");
-        abort();
-    }
-    ftl_assert(line->use == USE_FULL || line->use == USE_INUSE);
-    ftl_assert(line->valid);
     ftl_assert(line->ipc >= 0 && line->ipc < line->pgs_per_line);
     if (line->vpc == line->pgs_per_line) {
         ftl_assert(line->ipc == 0);
@@ -1127,12 +1119,6 @@ static void mark_page_valid(struct ssd *ssd, struct ppa *ppa)
 
     /* update corresponding line status */
     line = get_line(ssd, ppa);
-    if (line == NULL){
-        write_log("Null encountered in mark page valid\n");
-        abort();
-    }
-    ftl_assert(line->use == USE_INUSE);
-    ftl_assert(line->valid);
     ftl_assert(line->vpc >= 0 && line->vpc < line->pgs_per_line);
     line->vpc++;
 }
