@@ -1308,7 +1308,6 @@ static void mark_line_free(struct ssd *ssd, struct line *line)
 {
     int i;
     struct ssdparams *spp = &ssd->sp;
-    struct block_num *block_num = NULL;
     line->ipc = 0;
     line->vpc = 0;
     line->use = USE_FREE;
