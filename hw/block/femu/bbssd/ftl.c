@@ -1500,7 +1500,7 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
     int stream_choice = 0;
     int i;
     int r;
-    // uint64_t ts = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+    uint64_t ts = qemu_clock_get_us(QEMU_CLOCK_REALTIME);
     // double stream_min_lifetime;
     // double cur_stream_max_lifetime;
     //write_log("++++Write start LPN: %"PRIu64", end LPN: %"PRIu64", given stream: %d, now start++++\n", start_lpn, end_lpn, dspec);
@@ -1622,7 +1622,7 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
         // write_log("debug 16\n");
         
     }
-    write_log("[1, %"PRIu64", %"PRIu64", %d]\n", start_lpn, end_lpn, stream_choice);
+    write_log("[1, %"PRIu64", %"PRIu64", %"PRIu64", %d]\n", start_lpn, end_lpn, ts, stream_choice);
     si->next_avail_time = maxlat;
     //write_log("----Write start LPN: %"PRIu64", end LPN: %"PRIu64", given stream: %d, now end----\n", start_lpn, end_lpn, dspec);
     return maxlat;
