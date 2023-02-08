@@ -1384,6 +1384,7 @@ typedef struct FemuCtrl {
     // uint32_t        plane_per_channel;
     uint32_t        init_blk_per_plane;
     bool            enable_hetero_sbsize;
+    uint32_t        virt_id;
 
 } FemuCtrl;
 

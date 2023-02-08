@@ -449,7 +449,11 @@ static void ssd_init_write_pointer(struct ssd *ssd, uint8_t streams)
     write_log("ssd_init_write_pointer start\n");
     
     struct ssdparams *spp = &ssd->sp;
-    spp->real_num_streams = streams + 2 + 1; // 1 for gc, 2 for the default stream (8/1, 8/8 or maybe 8/4)
+    spp->real_num_streams = streams + 2;
+    if (spp->enable_hetero_sbsize){
+        spp->real_num_streams = streams + 2 + 1; // 1 for gc, 2 for the default stream (8/1, 8/8 or maybe 8/4)
+    }
+    
     spp->gc_stream_id = spp->real_num_streams - 1;
     // n streams -> n+2 write pointers since we need stream 0 as default stream and stream n+1 as GC stream.
     // * 2 for shadow streams 
@@ -679,8 +683,8 @@ static void ssd_init_params(struct ssdparams *spp)
 {
     spp->secsz = 512;
     spp->secs_per_pg = 8;
-    spp->pgs_per_blk = 256;
-    spp->blks_per_pl = 256; /* 16GB */
+    spp->pgs_per_blk = 1024;
+    spp->blks_per_pl = 512; /* 128GB */
     //spp->blks_per_pl = 320; /* 20GB */
     spp->pls_per_lun = 1;
     spp->luns_per_ch = 8;
@@ -833,7 +837,9 @@ static void ssd_init_rmap(struct ssd *ssd)
 void ssd_init(FemuCtrl *n)
 {
     #ifdef FEMU_DEBUG_FTL
-    femu_log_file = fopen("/mnt/testpartition/femu.log","a");
+    char str[80];
+    sprintf(str, "/mnt/testpartition/femu%d.log", n->virt_id);
+    femu_log_file = fopen(str,"a");
     #endif
     struct ssd *ssd = n->ssd;
     ssd->pages_from_host = 0;
