@@ -839,7 +839,7 @@ void ssd_init(FemuCtrl *n)
     #ifdef FEMU_DEBUG_FTL
     char str[80];
     sprintf(str, "/mnt/testpartition/femu%d.log", n->virt_id);
-    femu_log_file = fopen(str,"a");
+    femu_log_file = fopen(str, "w+");
     #endif
     struct ssd *ssd = n->ssd;
     ssd->pages_from_host = 0;
