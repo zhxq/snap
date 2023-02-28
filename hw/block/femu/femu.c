@@ -692,6 +692,7 @@ static Property femu_props[] = {
     DEFINE_PROP_UINT32("default_luns_per_channel", FemuCtrl, default_luns_per_channel, 8),
     DEFINE_PROP_UINT32("init_blk_per_plane", FemuCtrl, init_blk_per_plane, 1),
     DEFINE_PROP_BOOL("enable_hetero_sbsize", FemuCtrl, enable_hetero_sbsize, false),
+    DEFINE_PROP_BOOL("enable_partial_gc", FemuCtrl, enable_partial_gc, false),
     DEFINE_PROP_UINT32("virt_id", FemuCtrl, virt_id, 0),
     DEFINE_PROP_END_OF_LIST(),
 };

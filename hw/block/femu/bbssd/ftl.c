@@ -20,7 +20,7 @@ FILE * femu_log_file;
      _a < _b ? _a : _b; })
 
 static void *ftl_thread(void *arg);
-
+static inline struct nand_block *get_blk(struct ssd *ssd, struct ppa *ppa);
 // static void pqueue_change_line_lun(struct line * line, int curchannel, int curlun)
 // {
 //     line->curchannel = curchannel;
@@ -328,6 +328,7 @@ static struct line* create_line(struct ssd *ssd, int stream){
     struct lun_mgmt *lun_mgmt;
     struct block_mgmt *block_mgmt;
     struct block_num *block_num;
+    struct ppa ppa;
     line->id = channel_mgmt->next_line_id;
     write_log("[7, %d, %d, %d]\n", channels, luns, line->id);
     line->ipc = 0;
@@ -355,6 +356,7 @@ static struct line* create_line(struct ssd *ssd, int stream){
             line->inserted_to_victim_queue[i][j] = false;
         }
     }
+    ppa.g.pl = 0;
     for (j = 0; j < line->total_channels; j++){
         // write_log("j = %d\n", j);
         
@@ -379,6 +381,10 @@ static struct line* create_line(struct ssd *ssd, int stream){
             line->lun_list[j][k] = lun_mgmt->next_avail_lun;
             line->block_list[j][k] = block_num->block_num;
             g_free(block_num);
+            ppa.g.ch = line->channel_list[j];
+            ppa.g.lun = line->lun_list[j][k];
+            ppa.g.blk = line->block_list[j][k];
+            get_blk(ssd, &ppa)->status = USE_INUSE;
             lm->channel_lines[line->block_list[j][k]][line->channel_list[j]][line->lun_list[j][k]] = line;
             line->pgs_per_line += spp->pgs_per_blk;
             lun_mgmt->next_avail_lun = (lun_mgmt->next_avail_lun + 1) % spp->luns_per_ch;
@@ -524,6 +530,8 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream, uint64_t 
     int real_channel_no;
     int real_lun_no;
     int i, j;
+    struct ppa ppa;
+    ppa.g.pl = 0;
     // write_log("debug 14.2\n");
     
     //check_addr(wpp->ch, wpp->curline->start_channel + wpp->curline->total_channels);
@@ -561,6 +569,10 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream, uint64_t 
                     real_channel_no = wpp->curline->channel_list[i];
                     for (j = 0; j < wpp->curline->total_luns[i]; j++){
                         real_lun_no = wpp->curline->lun_list[i][j];
+                        ppa.g.ch = real_channel_no;
+                        ppa.g.lun = real_lun_no;
+                        ppa.g.blk = wpp->curline->block_list[i][j];
+                        get_blk(ssd, &ppa)->status = USE_FULL;
                         // write_log("debug 14.6 i = %d/%d, j = %d/%d, channel = %d, lun = %d\n", i, wpp->curline->total_channels, j, wpp->curline->total_luns[i], real_channel_no, real_lun_no);
                         
                         if (wpp->curline->vpc == wpp->curline->pgs_per_line) {
@@ -681,10 +693,41 @@ static void check_params(struct ssdparams *spp)
 
 static void ssd_init_params(struct ssdparams *spp)
 {
+    // spp->secsz = 512;
+    // spp->secs_per_pg = 8;
+    // spp->pgs_per_blk = 1024;
+    // spp->blks_per_pl = 512; /* 128GB */
+
+    // Old SSD
+    // Page size: 4K
+    // 64 Pages per block
+    // 1024 Blocks
+    // Total: 16GB
+    // spp->secsz = 512;
+    // spp->secs_per_pg = 8;
+    // spp->pgs_per_blk = 64;
+    // spp->blks_per_pl = 1024;
+
+    // Newer SSD
+    // Page size: 8K
+    // 128 Pages per block
+    // 1024 Blocks
+    // Total: 64GB
+    // spp->secsz = 512;
+    // spp->secs_per_pg = 16;
+    // spp->pgs_per_blk = 128;
+    // spp->blks_per_pl = 1024;
+
+    // Latest SSD
+    // Page size: 16K
+    // 256 Pages per block
+    // 1024 Blocks
+    // Total: 256GB
     spp->secsz = 512;
-    spp->secs_per_pg = 8;
-    spp->pgs_per_blk = 1024;
-    spp->blks_per_pl = 512; /* 128GB */
+    spp->secs_per_pg = 32;
+    spp->pgs_per_blk = 256;
+    spp->blks_per_pl = 1024;
+
     //spp->blks_per_pl = 320; /* 20GB */
     spp->pls_per_lun = 1;
     spp->luns_per_ch = 8;
@@ -763,6 +806,7 @@ static void ssd_init_nand_blk(struct nand_block *blk, struct ssdparams *spp)
     blk->vpc = 0;
     blk->erase_cnt = 0;
     blk->wp = 0;
+    blk->status = USE_FREE;
 }
 
 static void ssd_init_nand_plane(struct nand_plane *pl, struct ssdparams *spp)
@@ -872,7 +916,7 @@ void ssd_init(FemuCtrl *n)
     spp->enable_stream_redirect = n->enable_stream_redirect;
     spp->access_interval_precision = n->access_interval_precision;
     spp->enable_hetero_sbsize = n->enable_hetero_sbsize;
-
+    spp->enable_partial_gc = n->enable_partial_gc;
     /* initialize maptbl */
     ssd_init_maptbl(ssd);
 
@@ -1154,6 +1198,7 @@ static void mark_block_free(struct ssd *ssd, struct ppa *ppa)
     blk->ipc = 0;
     blk->vpc = 0;
     blk->erase_cnt++;
+    blk->status = USE_FREE;
 }
 
 static void gc_read_page(struct ssd *ssd, struct ppa *ppa)
@@ -1342,6 +1387,30 @@ static void mark_line_free(struct ssd *ssd, struct line *line)
     g_free(line);
 }
 
+static int select_victim_block(struct ssd *ssd, int channel, int lun){
+    // Choose a victim block for the given channel and lun.
+
+    int i;
+    struct ssdparams *spp = &ssd->sp;
+    struct ppa ppa;
+    int victim_id = -1;
+    int victim_valid_count = spp->pgs_per_blk + 1;
+    struct nand_block *blk;
+    ppa.g.ch = channel;
+    ppa.g.lun = lun;
+    ppa.g.pl = 0;
+    for (i = 0; i < spp->blks_per_lun; i++){
+        // Choose the block with smallest number of pages
+        ppa.g.blk = i;
+        blk = get_blk(ssd, &ppa);
+        if (blk->status == USE_FULL && blk->vpc < victim_valid_count){
+            victim_valid_count = blk->vpc;
+            victim_id = i;
+        }
+    }
+    return victim_id;
+}
+
 static int do_gc(struct ssd *ssd, bool force)
 {
     struct line *victim_line = NULL;
@@ -1365,48 +1434,67 @@ static int do_gc(struct ssd *ssd, bool force)
                 spp->gc_start_lun = (j + 1) % spp->luns_per_ch;
                 continue;
             }
-
-            victim_line = select_victim_line(ssd, i, j, force);
-            if (!victim_line) {
-                spp->gc_start_lun = (j + 1) % spp->luns_per_ch;
-                continue;
-            }else{
-                result = 0;
-            }
-
-            // Line ID, Invalid count, Valid count, Total channels, Total luns, Victim line stream ID, Force
-            write_log("[3, %d, %d, %d, %d, %d, %d, %d]\n", victim_line->id, victim_line->ipc, victim_line->vpc, victim_line->total_channels, victim_line->total_luns[i], victim_line->stream, force);
-
-            /* copy back valid data */
-            for (ch = 0; ch < victim_line->total_channels; ch++) {
-                ppa.g.ch = victim_line->channel_list[ch];
-                for (lun = 0; lun < victim_line->total_luns[ch]; lun++) {
-                    ppa.g.lun = victim_line->lun_list[ch][lun]; // This should be put to ppa.g.ch and ppa.g.blk when we exploit chip level parallelism
-                    ppa.g.pl = 0;
-                    ppa.g.blk = victim_line->block_list[ch][lun];
-                    // ftl_debug("GC-ing line:%d,ch:%d,lun:%d,blk:%d,ipc=%d,victim=%d,full=%d,free=%d,hostpgs=%"PRIu64",gcpgs=%"PRIu64"\n", victim_line->id, ch, lun, ppa.g.blk,
-                    //   victim_line->ipc, ssd->lm.victim_line_cnt, ssd->lm.full_line_cnt,
-                    //   ssd->lm.free_line_cnt, ssd->pages_from_host, ssd->pages_from_gc);
-                    lunp = get_lun(ssd, &ppa);
-                    clean_one_block(ssd, &ppa);
-                    mark_block_free(ssd, &ppa);
-
-                    if (spp->enable_gc_delay) {
-                        struct nand_cmd gce;
-                        gce.type = GC_IO;
-                        gce.cmd = NAND_ERASE;
-                        gce.stime = 0;
-                        ssd_advance_status(ssd, &ppa, &gce);
-                    }
-
-                    lunp->gc_endtime = lunp->next_lun_avail_time;
+            if (spp->enable_partial_gc){
+                ppa.g.ch = i;
+                ppa.g.lun = j;
+                ppa.g.pl = 0;
+                ppa.g.blk = select_victim_block(ssd, i, j);
+                write_log("[8, %d, %d, %d, %d, %d, %d, %d]\n", -1, get_blk(ssd, &ppa)->ipc, get_blk(ssd, &ppa)->vpc, i, j, ppa.g.blk, force);
+                lunp = get_lun(ssd, &ppa);
+                clean_one_block(ssd, &ppa);
+                mark_block_free(ssd, &ppa);
+                if (spp->enable_gc_delay) {
+                    struct nand_cmd gce;
+                    gce.type = GC_IO;
+                    gce.cmd = NAND_ERASE;
+                    gce.stime = 0;
+                    ssd_advance_status(ssd, &ppa, &gce);
                 }
+                lunp->gc_endtime = lunp->next_lun_avail_time;
+                assert(ppa.ppa != INVALID_PPA);
+            }else{
+                victim_line = select_victim_line(ssd, i, j, force);
+                if (!victim_line) {
+                    spp->gc_start_lun = (j + 1) % spp->luns_per_ch;
+                    continue;
+                }else{
+                    result = 0;
+                }
+
+                // Line ID, Invalid count, Valid count, Total channels, Total luns, Victim line stream ID, Force
+                write_log("[3, %d, %d, %d, %d, %d, %d, %d]\n", victim_line->id, victim_line->ipc, victim_line->vpc, victim_line->total_channels, victim_line->total_luns[i], victim_line->stream, force);
+
+                /* copy back valid data */
+                for (ch = 0; ch < victim_line->total_channels; ch++) {
+                    ppa.g.ch = victim_line->channel_list[ch];
+                    for (lun = 0; lun < victim_line->total_luns[ch]; lun++) {
+                        ppa.g.lun = victim_line->lun_list[ch][lun]; // This should be put to ppa.g.ch and ppa.g.blk when we exploit chip level parallelism
+                        ppa.g.pl = 0;
+                        ppa.g.blk = victim_line->block_list[ch][lun];
+                        // ftl_debug("GC-ing line:%d,ch:%d,lun:%d,blk:%d,ipc=%d,victim=%d,full=%d,free=%d,hostpgs=%"PRIu64",gcpgs=%"PRIu64"\n", victim_line->id, ch, lun, ppa.g.blk,
+                        //   victim_line->ipc, ssd->lm.victim_line_cnt, ssd->lm.full_line_cnt,
+                        //   ssd->lm.free_line_cnt, ssd->pages_from_host, ssd->pages_from_gc);
+                        lunp = get_lun(ssd, &ppa);
+                        clean_one_block(ssd, &ppa);
+                        mark_block_free(ssd, &ppa);
+
+                        if (spp->enable_gc_delay) {
+                            struct nand_cmd gce;
+                            gce.type = GC_IO;
+                            gce.cmd = NAND_ERASE;
+                            gce.stime = 0;
+                            ssd_advance_status(ssd, &ppa, &gce);
+                        }
+
+                        lunp->gc_endtime = lunp->next_lun_avail_time;
+                    }
+                }
+                assert(ppa.ppa != INVALID_PPA);
+                /* update line status */
+                // There might be a possibility that that block/channel/lun combination is used
+                // So we pass the line (instead of a PPA)
+                mark_line_free(ssd, victim_line);
             }
-            assert(ppa.ppa != INVALID_PPA);
-            /* update line status */
-            // There might be a possibility that that block/channel/lun combination is used
-            // So we pass the line (instead of a PPA)
-            mark_line_free(ssd, victim_line);
             spp->gc_start_lun = (j + 1) % spp->luns_per_ch;
             return result;
         }

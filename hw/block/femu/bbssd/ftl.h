@@ -114,6 +114,7 @@ struct nand_block {
     int vpc; /* valid page count */
     int erase_cnt;
     int wp; /* current write pointer */
+    int status;
 };
 
 struct nand_plane {
@@ -211,7 +212,7 @@ struct ssdparams {
     int real_num_streams;
     int gc_stream_id;
     bool enable_hetero_sbsize;
-
+    bool enable_partial_gc;
     int gc_start_channel;
     int gc_start_lun;
 
