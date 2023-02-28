@@ -681,10 +681,16 @@ static void check_params(struct ssdparams *spp)
 
 static void ssd_init_params(struct ssdparams *spp)
 {
+    // Latest SSD
+    // Page size: 16K
+    // 256 Pages per block
+    // 1024 Blocks
+    // Total: 256GB
     spp->secsz = 512;
-    spp->secs_per_pg = 8;
-    spp->pgs_per_blk = 1024;
-    spp->blks_per_pl = 512; /* 128GB */
+    spp->secs_per_pg = 32;
+    spp->pgs_per_blk = 256;
+    spp->blks_per_pl = 1024;
+
     //spp->blks_per_pl = 320; /* 20GB */
     spp->pls_per_lun = 1;
     spp->luns_per_ch = 8;
