@@ -1414,6 +1414,9 @@ static int do_gc(struct ssd *ssd, bool force)
             // So we pass the line (instead of a PPA)
             mark_line_free(ssd, victim_line);
             spp->gc_start_lun = (j + 1) % spp->luns_per_ch;
+            if (j + 1 >= spp->luns_per_ch){
+                spp->gc_start_channel = (i + 1) % spp->nchs;
+            }
             return result;
         }
         spp->gc_start_channel = (i + 1) % spp->nchs;
