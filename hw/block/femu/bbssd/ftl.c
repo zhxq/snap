@@ -1374,8 +1374,8 @@ static int do_gc(struct ssd *ssd, bool force)
                 result = 0;
             }
 
-            // Line ID, Invalid count, Valid count, Total channels, Total luns, Victim line stream ID, Force
-            write_log("[3, %d, %d, %d, %d, %d, %d, %d]\n", victim_line->id, victim_line->ipc, victim_line->vpc, victim_line->total_channels, victim_line->total_luns[i], victim_line->stream, force);
+            // Line ID, Invalid count, Valid count, Total channels, Total luns, Victim line stream ID, channel, lun, Force
+            write_log("[3, %d, %d, %d, %d, %d, %d, %d, %d, %d]\n", victim_line->id, victim_line->ipc, victim_line->vpc, victim_line->total_channels, victim_line->total_luns[i], victim_line->stream, i, j, force);
 
             /* copy back valid data */
             for (ch = 0; ch < victim_line->total_channels; ch++) {
