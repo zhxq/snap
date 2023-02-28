@@ -1387,7 +1387,7 @@ static void mark_line_free(struct ssd *ssd, struct line *line)
     g_free(line);
 }
 
-static int select_victim_block(struct ssd *ssd, int channel, int lun){
+static struct ppa select_victim_block(struct ssd *ssd, int channel, int lun){
     // Choose a victim block for the given channel and lun.
 
     int i;
@@ -1408,9 +1408,37 @@ static int select_victim_block(struct ssd *ssd, int channel, int lun){
             victim_id = i;
         }
     }
-    return victim_id;
+    ppa.g.blk = victim_id;
+    if (victim_id == -1){
+        ppa.ppa = INVALID_PPA;
+    }
+    return ppa;
 }
 
+/*
+static struct ppa select_overall_victim_block(struct ssd *ssd){
+    int i, j, blockid;
+    struct ssdparams *spp = &ssd->sp;
+    struct ppa ppa;
+    struct ppa result;
+    result.ppa = INVALID_PPA;
+    ppa.g.pl = 0;
+    int smallest_count = spp->pgs_per_blk + 1;
+    for (i = 0; i < spp->nchs; i++){
+        for (j = 0; j < spp->luns_per_ch; j++){
+            ppa = select_victim_block(ssd, i, j);
+            if (ppa.ppa == INVALID_PPA){
+                continue;
+            }
+            if (get_blk(ssd, &ppa)->vpc < smallest_count){
+                result = ppa;
+                smallest_count = get_blk(ssd, &ppa)->vpc;
+            }
+        }
+    }
+    return result;
+}
+*/
 static int do_gc(struct ssd *ssd, bool force)
 {
     struct line *victim_line = NULL;
@@ -1425,33 +1453,46 @@ static int do_gc(struct ssd *ssd, bool force)
     int lun_end = spp->gc_start_lun + spp->luns_per_ch;
     ppa.ppa = INVALID_PPA;
     
+    if (spp->enable_partial_gc){
+        if (!should_gc_channel_lun(ssd, spp->gc_start_channel, spp->gc_start_lun, force)){
+            spp->gc_start_lun++;
+            if (spp->gc_start_lun == spp->luns_per_ch){
+                spp->gc_start_lun = 0;
+                spp->gc_start_channel = (spp->gc_start_channel + 1) % spp->nchs;
+            }
+            return result;
+        }
+        ppa = select_victim_block(ssd, spp->gc_start_channel, spp->gc_start_lun);
+        assert(ppa.ppa != INVALID_PPA);
+        write_log("[8, %d, %d, %d, %d, %d, %d, %d]\n", get_line(ssd, &ppa)->id, get_blk(ssd, &ppa)->ipc, get_blk(ssd, &ppa)->vpc, ppa.g.ch, ppa.g.lun, ppa.g.blk, force);
+        lunp = get_lun(ssd, &ppa);
+        clean_one_block(ssd, &ppa);
+        mark_block_free(ssd, &ppa);
+        if (spp->enable_gc_delay) {
+            struct nand_cmd gce;
+            gce.type = GC_IO;
+            gce.cmd = NAND_ERASE;
+            gce.stime = 0;
+            ssd_advance_status(ssd, &ppa, &gce);
+        }
+        lunp->gc_endtime = lunp->next_lun_avail_time;
+        spp->gc_start_lun++;
+        if (spp->gc_start_lun == spp->luns_per_ch){
+            spp->gc_start_lun = 0;
+            spp->gc_start_channel = (spp->gc_start_channel + 1) % spp->nchs;
+        }
+        return result;
+    }
+
     for (loopi = spp->gc_start_channel; loopi < channel_end; loopi++){
         i = loopi % spp->nchs;
         for (loopj = spp->gc_start_lun; loopj < lun_end; loopj++){
             j = loopj % spp->luns_per_ch;
-
             if (!should_gc_channel_lun(ssd, i, j, force)){
-                spp->gc_start_lun = (j + 1) % spp->luns_per_ch;
                 continue;
             }
             if (spp->enable_partial_gc){
-                ppa.g.ch = i;
-                ppa.g.lun = j;
-                ppa.g.pl = 0;
-                ppa.g.blk = select_victim_block(ssd, i, j);
-                write_log("[8, %d, %d, %d, %d, %d, %d, %d]\n", -1, get_blk(ssd, &ppa)->ipc, get_blk(ssd, &ppa)->vpc, i, j, ppa.g.blk, force);
-                lunp = get_lun(ssd, &ppa);
-                clean_one_block(ssd, &ppa);
-                mark_block_free(ssd, &ppa);
-                if (spp->enable_gc_delay) {
-                    struct nand_cmd gce;
-                    gce.type = GC_IO;
-                    gce.cmd = NAND_ERASE;
-                    gce.stime = 0;
-                    ssd_advance_status(ssd, &ppa, &gce);
-                }
-                lunp->gc_endtime = lunp->next_lun_avail_time;
-                assert(ppa.ppa != INVALID_PPA);
+                
             }else{
                 victim_line = select_victim_line(ssd, i, j, force);
                 if (!victim_line) {
@@ -1494,11 +1535,13 @@ static int do_gc(struct ssd *ssd, bool force)
                 // There might be a possibility that that block/channel/lun combination is used
                 // So we pass the line (instead of a PPA)
                 mark_line_free(ssd, victim_line);
+                spp->gc_start_lun = (j + 1) % spp->luns_per_ch;
+                if (j + 1 > spp->luns_per_ch){
+                    spp->gc_start_channel = (i + 1) % spp->nchs;
+                }
+                return result;
             }
-            spp->gc_start_lun = (j + 1) % spp->luns_per_ch;
-            return result;
         }
-        spp->gc_start_channel = (i + 1) % spp->nchs;
     }
 
     return result;
