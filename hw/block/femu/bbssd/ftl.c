@@ -1366,7 +1366,7 @@ static int do_gc(struct ssd *ssd, bool force)
         i = loopi % spp->nchs;
         for (loopj = spp->gc_start_lun; loopj < lun_end; loopj++){
             j = loopj % spp->luns_per_ch;
-
+            // write_log("[8, %d, %d, %d, %d]\n", loopi, loopj, i, j);
             if (!should_gc_channel_lun(ssd, i, j, force)){
                 spp->gc_start_lun = (j + 1) % spp->luns_per_ch;
                 continue;
@@ -1375,7 +1375,7 @@ static int do_gc(struct ssd *ssd, bool force)
             victim_line = select_victim_line(ssd, i, j, force);
             if (!victim_line) {
                 spp->gc_start_lun = (j + 1) % spp->luns_per_ch;
-                continue;
+                return result;
             }else{
                 result = 0;
             }
