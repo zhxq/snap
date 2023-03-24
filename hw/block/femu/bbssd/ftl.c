@@ -173,6 +173,7 @@ uint64_t get_uptime(struct ssd *ssd){
 
 static void set_latest_access_time(FemuCtrl *n, struct ssd *ssd, uint64_t start_lpn, uint64_t end_lpn, int op)
 {
+    struct ssdparams *spp = &ssd->sp;
     uint64_t passed_epoch = get_passed_epoch_since_update(ssd);
     if (passed_epoch > 0){
         // Update the last updated timestamp
@@ -212,11 +213,11 @@ static void set_latest_access_time(FemuCtrl *n, struct ssd *ssd, uint64_t start_
             // Only consider W->W and W->D as death. Update death time avg in this case
             if (prev_op == WRITE_OP || prev_op == WRITE_ONCE_OP){
                 if (prev_avg > 0){
-                    ssd->death_time_list[chunk].death_time_avg = prev_avg * (1 - DECAY) + prev_age * DECAY;
+                    ssd->death_time_list[chunk].death_time_avg = prev_avg * (1 - spp->decay) + prev_age * spp->decay;
                     //write_log("Old prediction: %"PRIu64", age: %"PRIu64", new prediction: %d, Chunk: %"PRIu64"\n", prev_avg, prev_age, ssd->death_time_list[chunk].death_time_avg, chunk);
                 }else{
                     if (likely(prev_op == WRITE_OP)){
-                        ssd->death_time_list[chunk].death_time_avg = prev_avg * (1 - DECAY) + prev_age * DECAY;
+                        ssd->death_time_list[chunk].death_time_avg = prev_avg * (1 - spp->decay) + prev_age * spp->decay;
                         //write_log("Old prediction: %"PRIu64", age: %"PRIu64", new prediction: %d, Chunk: %"PRIu64"\n", prev_avg, prev_age, ssd->death_time_list[chunk].death_time_avg, chunk);
                     }else{
                         ftl_assert(prev_avg == 0);
@@ -847,6 +848,7 @@ void ssd_init(FemuCtrl *n)
     sprintf(str, "/mnt/testpartition/femu%d.log", n->virt_id);
     femu_log_file = fopen(str, "w+");
     #endif
+    const char* pEnd;
     struct ssd *ssd = n->ssd;
     ssd->pages_from_host = 0;
     ssd->pages_from_gc = 0;
@@ -858,6 +860,12 @@ void ssd_init(FemuCtrl *n)
     spp->default_channels_per_line = n->default_channels_per_line;
     spp->default_luns_per_channel = n->default_luns_per_channel;
     spp->init_blk_per_plane = n->init_blk_per_plane;
+    if (qemu_strtod(n->decay_period_str, &pEnd, &spp->decay) != 0){
+        ftl_err("Error when setting decay period!");
+        abort();
+    }
+
+    write_log("Decay period set: %.2f\n", spp->decay);
     ssd_init_params(spp);
 
     /* initialize ssd internal layout architecture */

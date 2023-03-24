@@ -1385,7 +1385,7 @@ typedef struct FemuCtrl {
     uint32_t        init_blk_per_plane;
     bool            enable_hetero_sbsize;
     uint32_t        virt_id;
-
+    char*           decay_period_str;
 } FemuCtrl;
 
 typedef struct NvmePollerThreadArgument {

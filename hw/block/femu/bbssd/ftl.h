@@ -17,8 +17,8 @@
 #define WRITE_ONCE_OP 2 // Only wrote once, will segue into WRITE_OP on next write
 #define DISCARD_OP    3 // Discard
 
-// Define decay factor
-#define DECAY 0.9
+// // Define decay factor
+// #define DECAY 0.9
 
 // Time Precision in Bits
 #define TIME_PREC_BITS    (15)
@@ -216,6 +216,7 @@ struct ssdparams {
     int gc_start_lun;
 
     int max_allow_gc_lines;
+    double decay;
 };
 
 typedef struct line {
