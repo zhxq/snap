@@ -3,7 +3,7 @@
 #ifdef FEMU_DEBUG_FTL
 FILE * femu_log_file;
 #define write_log(fmt, ...) \
-    do { if (femu_log_file) fprintf(femu_log_file, fmt, ## __VA_ARGS__);} while (0)
+    do { if (femu_log_file) {fprintf(femu_log_file, fmt, ## __VA_ARGS__); fflush(NULL);}} while (0)
 #else
 #define write_log(fmt, ...) \
     do { } while (0)
@@ -27,25 +27,13 @@ static void *ftl_thread(void *arg);
 //     line->curlun = curlun;
 // }
 
-static int get_channels_needed(struct ssd *ssd, int stream){
-    struct ssdparams *spp = &ssd->sp;
-    return spp->default_channels_per_line;
-}
+// static int get_channels_needed(struct ssd *ssd, int stream){
+//     return 1;
+// }
 
-static int get_luns_needed(struct ssd *ssd, int stream){
-    struct ssdparams *spp = &ssd->sp;
-    if (spp->enable_hetero_sbsize){
-        if (stream == spp->gc_stream_id){
-            return spp->luns_per_ch;
-        }
-        if (stream % 2 == 0){
-            return 1;
-        }else{
-            return spp->default_luns_per_channel;
-        }
-    }
-    return spp->default_luns_per_channel;
-}
+// static int get_luns_needed(struct ssd *ssd, int stream){
+//     return 1;
+// }
 
 static bool should_gc_channel_lun(struct ssd *ssd, int channel, int lun, bool high){
     struct ssdparams *spp = &ssd->sp;
@@ -159,11 +147,11 @@ static uint64_t get_passed_epoch_since_update(struct ssd *ssd){
     return passed_epoch;
 }
 
-static uint64_t get_passed_epoch_since_start(struct ssd *ssd){
-    uint64_t now_real_time = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
-    uint64_t system_epoch = (now_real_time - ssd->sp.start_time) / MS_PER_S / ssd->sp.access_interval_precision;
-    return system_epoch;
-}
+// static uint64_t get_passed_epoch_since_start(struct ssd *ssd){
+//     uint64_t now_real_time = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
+//     uint64_t system_epoch = (now_real_time - ssd->sp.start_time) / MS_PER_S / ssd->sp.access_interval_precision;
+//     return system_epoch;
+// }
 
 uint64_t get_uptime(struct ssd *ssd){
     uint64_t now_real_time = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
@@ -322,8 +310,8 @@ static struct line* create_line(struct ssd *ssd, int stream){
     struct ssdparams *spp = &ssd->sp;
     struct line_mgmt *lm = &ssd->lm;
     int i, j, k;
-    int channels = get_channels_needed(ssd, stream);
-    int luns = get_luns_needed(ssd, stream);
+    int channels = 1;
+    int luns = 1;
     struct line *line = (struct line *)g_malloc0(sizeof(struct line));
     struct channel_mgmt *channel_mgmt = &ssd->channel_mgmt;
     struct lun_mgmt *lun_mgmt;
@@ -370,6 +358,20 @@ static struct line* create_line(struct ssd *ssd, int stream){
         line->lun_list[j] = g_malloc0_n(line->total_luns[j], sizeof(int));
         line->block_list[j] = g_malloc0_n(line->total_luns[j], sizeof(int));
         for (k = 0; k < line->total_luns[j]; k++){
+            // Want to create lines like:
+            // channel ID, LUN id:
+            // 0, 0
+            // 0, 1
+            // ...
+            // 0, 7
+            // 1, 0
+            // 1, 1
+            // ... 
+            // 7, 7
+            channel_mgmt->next_avail_channel = stream % spp->nchs;
+            lun_mgmt->next_avail_lun = stream / spp->nchs;
+            
+            write_log("line ID = %d, stream = %d, channel = %d, LUN = %d\n", line->id, stream, channel_mgmt->next_avail_channel, lun_mgmt->next_avail_lun);
             block_mgmt = &lun_mgmt->lun[lun_mgmt->next_avail_lun];
             if (block_mgmt->free_blocks_cnt == 0){
                 continue;
@@ -384,7 +386,6 @@ static struct line* create_line(struct ssd *ssd, int stream){
             line->pgs_per_line += spp->pgs_per_blk;
             lun_mgmt->next_avail_lun = (lun_mgmt->next_avail_lun + 1) % spp->luns_per_ch;
         }
-        channel_mgmt->next_avail_channel = (channel_mgmt->next_avail_channel + 1) % spp->nchs;
     }
     channel_mgmt->next_line_id++;
     return line;
@@ -402,6 +403,7 @@ static void ssd_init_lines(struct ssd *ssd)
     struct block_num *block_num;
     // spp->max_allow_gc_lines = 0;
     channel_mgmt->next_avail_channel = 0;
+    channel_mgmt->avail_chips = spp->luns_per_ch;
     channel_mgmt->next_line_id = 0;
     channel_mgmt->channel = g_malloc0_n(spp->nchs, sizeof(struct lun_mgmt));
     // struct line *line;
@@ -450,12 +452,7 @@ static void ssd_init_write_pointer(struct ssd *ssd, uint8_t streams)
     write_log("ssd_init_write_pointer start\n");
     
     struct ssdparams *spp = &ssd->sp;
-    spp->real_num_streams = streams + 2;
-    if (spp->enable_hetero_sbsize){
-        spp->real_num_streams = streams + 2 + 1; // 1 for gc, 2 for the default stream (8/1, 8/8 or maybe 8/4)
-    }
-    
-    spp->gc_stream_id = spp->real_num_streams - 1;
+    spp->real_num_streams = spp->nchs * spp->luns_per_ch;
     // n streams -> n+2 write pointers since we need stream 0 as default stream and stream n+1 as GC stream.
     // * 2 for shadow streams 
     ssd->wp = g_malloc0_n(spp->real_num_streams, sizeof(struct write_pointer));
@@ -488,7 +485,6 @@ static void ssd_init_write_pointer(struct ssd *ssd, uint8_t streams)
         si->full_before = false;
         si->sender = false;
         si->receiver = false;
-        si->next_avail_time = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
     }
     write_log("ssd_init_write_pointer end\n");
     
@@ -513,7 +509,7 @@ static struct line *get_next_free_line(struct ssd *ssd, int stream)
     return curline;
 }
 
-static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream, uint64_t lpn)
+static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream)
 {
     // write_log("debug 14.1, stream = %d\n", stream);
     
@@ -610,7 +606,6 @@ static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream, uint64_t 
                 si->block_open_time = uptime;
                 si->earliest_death_time = -1; // Max uint64_t
                 si->latest_death_time = 0;
-                si->next_avail_time = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
                 wpp->curline = NULL;
                 // write_log("debug 14.13\n");
                 
@@ -682,15 +677,25 @@ static void check_params(struct ssdparams *spp)
 
 static void ssd_init_params(struct ssdparams *spp)
 {
-    // Latest SSD
-    // Page size: 16K
+    // // Latest SSD
+    // // Page size: 16K
+    // // 256 Pages per block
+    // // 1024 Blocks
+    // // Total: 256GB
+    // spp->secsz = 512;
+    // spp->secs_per_pg = 32;
+    // spp->pgs_per_blk = 256;
+    // spp->blks_per_pl = 1024;
+
+    // Test SSD
+    // Page size: 4K
     // 256 Pages per block
-    // 1024 Blocks
-    // Total: 256GB
+    // 256 Blocks
+    // Total: 16GB
     spp->secsz = 512;
-    spp->secs_per_pg = 32;
+    spp->secs_per_pg = 8;
     spp->pgs_per_blk = 256;
-    spp->blks_per_pl = 1024;
+    spp->blks_per_pl = 256;
 
     //spp->blks_per_pl = 320; /* 20GB */
     spp->pls_per_lun = 1;
@@ -848,6 +853,7 @@ void ssd_init(FemuCtrl *n)
     sprintf(str, "/mnt/testpartition/femu%d.log", n->virt_id);
     femu_log_file = fopen(str, "w+");
     #endif
+    uint64_t i = 0;
     const char* pEnd;
     struct ssd *ssd = n->ssd;
     ssd->pages_from_host = 0;
@@ -870,7 +876,7 @@ void ssd_init(FemuCtrl *n)
 
     /* initialize ssd internal layout architecture */
     ssd->ch = g_malloc0(sizeof(struct ssd_channel) * spp->nchs);
-    for (int i = 0; i < spp->nchs; i++) {
+    for (i = 0; i < spp->nchs; i++) {
         ssd_init_ch(&ssd->ch[i], spp);
     }
 
@@ -886,6 +892,38 @@ void ssd_init(FemuCtrl *n)
     spp->enable_stream_redirect = n->enable_stream_redirect;
     spp->access_interval_precision = n->access_interval_precision;
     spp->enable_hetero_sbsize = n->enable_hetero_sbsize;
+    spp->total_stripe_groups = (spp->tt_pgs / (spp->luns_per_ch - 1)) + 1;
+    spp->stripe_group_parity_ppa = g_malloc0(sizeof(struct ppa) * spp->total_stripe_groups);
+    for (i = 0; i < spp->total_stripe_groups; i++){
+        spp->stripe_group_parity_ppa[i].ppa = UNMAPPED_PPA;
+    }
+
+    int j;
+    
+    spp->stream_mapping = malloc(sizeof(int) * (spp->nchs - 1) * spp->luns_per_ch);
+    
+    int mapping_loc = 0;
+    for (i = 0; i < spp->nchs * spp->luns_per_ch; i++){
+        j = i % (spp->nchs * spp->nchs);
+        if (j % (spp->nchs - 1) == 0 && j != 0){
+            if (j + 1 == spp->nchs * spp->nchs){
+                spp->stream_mapping[mapping_loc] = i;
+                mapping_loc += 1;
+            }
+        }else{
+            spp->stream_mapping[mapping_loc] = i;
+            mapping_loc += 1;
+        }
+    }
+    
+
+    write_log("mapping_loc: %d", mapping_loc);
+
+    assert(mapping_loc == (spp->nchs - 1) * spp->luns_per_ch);
+
+    for (i = 0; i < (spp->nchs - 1) * spp->luns_per_ch; i++){
+        write_log("Stream mapping table: %"PRIu64", %d\n", i, spp->stream_mapping[i]);
+    }
 
     /* initialize maptbl */
     ssd_init_maptbl(ssd);
@@ -1187,7 +1225,7 @@ static uint64_t gc_write_page(struct ssd *ssd, struct ppa *old_ppa)
 {
     struct ppa new_ppa;
     struct nand_lun *new_lun;
-    struct ssdparams *spp = &ssd->sp;
+    struct line *old_line = get_line(ssd, old_ppa);
     // write_log("debug gcwp 1\n");
     
     uint64_t lpn = get_rmap_ent(ssd, old_ppa);
@@ -1198,7 +1236,7 @@ static uint64_t gc_write_page(struct ssd *ssd, struct ppa *old_ppa)
     // since our previous guess of lifetime failed
     // write_log("debug gcwp 3\n");
     
-    new_ppa = get_new_page(ssd, spp->gc_stream_id);
+    new_ppa = get_new_page(ssd, old_line->stream);
     /* update maptbl */
     // write_log("debug gcwp 4\n");
     
@@ -1213,7 +1251,7 @@ static uint64_t gc_write_page(struct ssd *ssd, struct ppa *old_ppa)
     // write_log("debug gcwp 7\n");
     
     /* need to advance the write pointer here */
-    ssd_advance_write_pointer(ssd, spp->gc_stream_id, lpn);
+    ssd_advance_write_pointer(ssd, old_line->stream);
     // write_log("debug gcwp 8\n");
     
     if (ssd->sp.enable_gc_delay) {
@@ -1358,6 +1396,7 @@ static void mark_line_free(struct ssd *ssd, struct line *line)
 
 static int do_gc(struct ssd *ssd, bool force)
 {
+    // TODO: make sure one stripe group can have one chip doing GC concurrently
     struct line *victim_line = NULL;
     struct ssdparams *spp = &ssd->sp;
     struct nand_lun *lunp;
@@ -1433,61 +1472,166 @@ static int do_gc(struct ssd *ssd, bool force)
     return result;
 }
 
-static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
-{
+static bool lun_is_gcing(struct ssd *ssd, struct ppa *ppa){
+    struct nand_lun *lun = get_lun(ssd, ppa);
+    uint64_t time = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+    if (time <= lun->gc_endtime){
+        return true;
+    }
+    return false;
+}
+
+static int get_needed_LUN_id_before_parity(struct ssd *ssd, uint64_t lpn){
     struct ssdparams *spp = &ssd->sp;
-    uint64_t lba = req->slba;
-    int nsecs = req->nlb;
-    struct ppa ppa;
-    uint64_t start_lpn = lba / spp->secs_per_pg;
-    uint64_t end_lpn = (lba + nsecs - 1) / spp->secs_per_pg;
+    return lpn % ((spp->nchs - 1) * spp->luns_per_ch);
+}
+
+// Map an LPN to a LUN stream
+static int lpn_to_stream(struct ssd *ssd, uint64_t lpn){
+    struct ssdparams *spp = &ssd->sp;
+    int lun = get_needed_LUN_id_before_parity(ssd, lpn);
+    return spp->stream_mapping[lun];
+}
+
+// Get the parity LUN stream ID based on a stripe group
+static int get_stripe_group_parity_stream(struct ssd *ssd, uint64_t stripe_group){
+    struct ssdparams *spp = &ssd->sp;
+    stripe_group = stripe_group % spp->luns_per_ch;
+    int row_start = stripe_group * spp->nchs;
+    int n = spp->nchs - 1 - stripe_group % spp->nchs;
+    return row_start + n;
+}
+
+// // Get the parity LUN stream ID based on a stream ID
+// static int get_stream_parity_stream(struct ssd *ssd, int stream){
+//     struct ssdparams *spp = &ssd->sp;
+//     int stripe_group = stream / spp->nchs;
+//     return get_stripe_group_parity_stream(ssd, stripe_group);
+// }
+
+static uint64_t ssd_read_pages(struct ssd *ssd, uint64_t start_lpn, uint64_t end_lpn){
+    struct ssdparams *spp = &ssd->sp;
     uint64_t lpn;
+    struct ppa ppa;
+    struct ppa parity_ppa;
     uint64_t sublat, maxlat = 0;
+    write_log("read 1\n");
+    uint64_t this_stripe_group = -1;
+
+    uint64_t this_stripe_group_start = 0;
+    uint64_t this_stripe_group_end = 0;
 
     if (end_lpn >= spp->tt_pgs) {
-        ftl_err("start_lpn=%"PRIu64",tt_pgs=%d\n", start_lpn, ssd->sp.tt_pgs);
+        write_log("start_lpn=%"PRIu64",tt_pgs=%d\n", start_lpn, ssd->sp.tt_pgs);
+        assert(end_lpn < spp->tt_pgs);
     }
-    write_log("[6, %"PRIu64", %"PRIu64"]\n", start_lpn, end_lpn);
-    /* normal IO read path */
+    // uint64_t start_stripe_group = start_lpn / (spp->luns_per_ch - 1);
+    // uint64_t end_stripe_group = end_lpn / (spp->luns_per_ch - 1);
+    // uint64_t start_stripe_offset = start_lpn % (spp->luns_per_ch - 1);
+    // uint64_t end_stripe_offset = end_lpn % (spp->luns_per_ch - 1);
+
+    // TODO: read these pages, reconstruct parity
+    // ssd_read_pages(ssd, start_lpn - start_stripe_offset, start_lpn - 1);
+    // ssd_read_pages(ssd, end_lpn, end_lpn + (spp->luns_per_ch - 1 - end_stripe_offset) - 1);
+    write_log("read 2, start_lpn=%"PRIu64", end_lpn=%"PRIu64"\n", start_lpn, end_lpn);
     for (lpn = start_lpn; lpn <= end_lpn; lpn++) {
+        this_stripe_group = lpn / (spp->nchs - 1);
+        this_stripe_group_start = this_stripe_group * (spp->nchs - 1);
+        this_stripe_group_end = (this_stripe_group + 1) * (spp->nchs - 1) - 1;
+        write_log("read 3 lpn: %"PRIu64"\n", lpn);
         ppa = get_maptbl_ent(ssd, lpn);
+        write_log("read 3.5 ppa: %"PRIu64"\n", ppa.ppa);
+        // If LUN is currently doing GC, reconstruct using other pages
         if (!mapped_ppa(&ppa) || !valid_ppa(ssd, &ppa)) {
             //printf("%s,lpn(%" PRId64 ") not mapped to valid ppa\n", ssd->ssdname, lpn);
             //printf("Invalid ppa,ch:%d,lun:%d,blk:%d,pl:%d,pg:%d,sec:%d\n",
             //ppa.g.ch, ppa.g.lun, ppa.g.blk, ppa.g.pl, ppa.g.pg, ppa.g.sec);
             continue;
         }
+        if (lun_is_gcing(ssd, &ppa)){
+            // Remember each only on LUN GC can occur at a given time in a stripe group
+            // So even we can check several pages from several LUNs
+            // only one read/reconstruct can occur inside on stripe group
+            write_log("Reading a GC'ing LUN.\n");
+            if (this_stripe_group_start < start_lpn){
+                sublat = ssd_read_pages(ssd, this_stripe_group_start, start_lpn - 1);
+                maxlat = (sublat > maxlat) ? sublat : maxlat;
+            }
 
+            if (this_stripe_group_end > end_lpn){
+                sublat = ssd_read_pages(ssd, end_lpn + 1, this_stripe_group_end);
+                maxlat = (sublat > maxlat) ? sublat : maxlat;
+            }
+
+            // TODO: reading parity page is also required
+            parity_ppa.ppa = spp->stripe_group_parity_ppa[this_stripe_group].ppa;
+            if (!mapped_ppa(&parity_ppa) || !valid_ppa(ssd, &parity_ppa)) {
+                //printf("%s,lpn(%" PRId64 ") not mapped to valid ppa\n", ssd->ssdname, lpn);
+                //printf("Invalid ppa,ch:%d,lun:%d,blk:%d,pl:%d,pg:%d,sec:%d\n",
+                //ppa.g.ch, ppa.g.lun, ppa.g.blk, ppa.g.pl, ppa.g.pg, ppa.g.sec);
+                write_log("Error: stripe_group %"PRIu64": invalid parity ppa @ %"PRIu64"\n", this_stripe_group, parity_ppa.ppa);
+            }
+            struct nand_cmd srd;
+            srd.type = USER_IO;
+            srd.cmd = NAND_READ;
+            // change the model of reads - if GC, then we can hide GC latency
+            sublat = ssd_advance_status(ssd, &parity_ppa, &srd);
+            maxlat = (sublat > maxlat) ? sublat : maxlat;
+        }
+        write_log("read 4\n");
+        
+        write_log("read 5\n");
         struct nand_cmd srd;
         srd.type = USER_IO;
         srd.cmd = NAND_READ;
-        srd.stime = req->stime;
         sublat = ssd_advance_status(ssd, &ppa, &srd);
         maxlat = (sublat > maxlat) ? sublat : maxlat;
+        write_log("read 6\n");
     }
-
+    write_log("read 7\n");
     return maxlat;
+}
+
+static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
+{
+    struct ssdparams *spp = &ssd->sp;
+    uint64_t lba = req->slba;
+    int nsecs = req->nlb;
+    uint64_t start_lpn = lba / spp->secs_per_pg;
+    uint64_t end_lpn = (lba + nsecs - 1) / spp->secs_per_pg;
+    uint64_t maxlat = 0;
+
+    if (end_lpn >= spp->tt_pgs) {
+        ftl_err("start_lpn=%"PRIu64",tt_pgs=%d\n", start_lpn, ssd->sp.tt_pgs);
+    }
+    write_log("[6, %"PRIu64", %"PRIu64"]\n", start_lpn, end_lpn);
+    /* normal IO read path */
+
+    // Do real reads
+    maxlat = ssd_read_pages(ssd, start_lpn, end_lpn);
+    write_log("read 8\n");
+    return maxlat;  
 }
 
 
 static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
 {
     // write_log("debug 1\n");
-    
+    write_log("write 1\n");
     NvmeRwCmd *rw = (NvmeRwCmd *) &req->cmd;
     NvmeNamespace *ns = req->ns;
     uint16_t control = le16_to_cpu(rw->control);
     uint32_t dsmgmt = le32_to_cpu(rw->dsmgmt);
     bool stream = control & NVME_RW_DTYPE_STREAMS;
     uint64_t page_death_time = 0;
-    uint64_t passed_epoch_since_start = get_passed_epoch_since_start(ssd);
+    // uint64_t passed_epoch_since_start = get_passed_epoch_since_start(ssd);
     // uint64_t uptime = get_uptime(ssd);
     struct stream_info *si;
     // struct stream_info *cmp_si;
-    int offset = 0;
+    // int offset = 0;
     uint16_t dspec = (dsmgmt >> 16) & 0xFFFF; //Stream ID
     // write_log("debug 2\n");
-    
+    write_log("write 2\n");
 
     // Remember, if stream is true, then dspec = 0 means stream ID 1 (though Linux kernel starts from stream ID = 2),
     // and so on. See nvme_assign_write_stream() line 702 for v5.11.10.
@@ -1502,6 +1646,7 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
         ////write_log("Stream not set: %d\n", dspec);
         dspec = 0;
     }
+    write_log("write 3\n");
     // write_log("debug 3\n");
     
     uint64_t lba = req->slba;
@@ -1515,15 +1660,22 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
     struct ppa ppa;
     uint64_t lpn;
     uint64_t curlat = 0, maxlat = 0;
-    uint64_t chunk;
-    uint64_t prediction;
+    // uint64_t chunk;
+    // uint64_t prediction;
+    uint64_t start_stripe_group = -1;
+    uint64_t end_stripe_group = -1;
+    uint64_t start_stripe_offset = -1;
+    uint64_t end_stripe_offset = -1;
+    uint64_t stripe_group;
     // write_log("debug 4\n");
     
     // uint64_t prev_starter = start_lpn;
     int stream_choice = 0;
-    int i;
+    int parity_stream = 0;
+    // int i;
     int r;
     uint64_t ts = qemu_clock_get_us(QEMU_CLOCK_REALTIME);
+    write_log("write 4\n");
     // double stream_min_lifetime;
     // double cur_stream_max_lifetime;
     //write_log("++++Write start LPN: %"PRIu64", end LPN: %"PRIu64", given stream: %d, now start++++\n", start_lpn, end_lpn, dspec);
@@ -1543,59 +1695,48 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
             break;
     }
     // write_log("debug 7\n");
-    
+    write_log("write 5\n");
     // DZ Start
     // This is a write. Update death time and average.
     if (spp->death_time_prediction){
         set_latest_access_time(n, ssd, start_lpn, end_lpn, WRITE_OP);
     }
     // write_log("debug 8\n");
-    
+        
     // DZ End
 
-    if (dspec > 0){
-        stream_choice = dspec;
-    } else if (spp->death_time_prediction){
-        stream_choice = 0;
-        chunk = lpn_to_chunk(start_lpn, n->pages_per_chunk);
-        if (ssd->death_time_list[chunk].last_access_op != INITIAL_OP && ssd->death_time_list[chunk].last_access_op != WRITE_ONCE_OP){
-            prediction = ssd->death_time_list[chunk].death_time_avg;
-            page_death_time = passed_epoch_since_start + prediction;
-            // Stream should have exponential accepted range
-            // e.g. stream 1: DT b/t 0~1
-            //      stream 2: DT b/t 1~3
-            //      stream 3: DT b/t 3~7
-            for (i = 0; i < spp->msl / 2; i++){
-                prediction >>= 1;
-                stream_choice += 1;
-                if (prediction == 0){
-                    break;
-                }
-            }
-
-        }else if(ssd->death_time_list[chunk].last_access_op == WRITE_ONCE_OP){
-            stream_choice = 0; // default stream
-            //write_log("Addr: %"PRIu64", Chunk: %"PRIu64", First time written, no DT info, assigned to stream 0.\n", lpn, chunk);
-        }
+    // Read other pages from the same stripe group
+    // Need to read some before and after
+    write_log("write 6, start_lpn=%"PRIu64", end_lpn=%"PRIu64"\n", start_lpn, end_lpn);
+    start_stripe_group = start_lpn / (spp->nchs - 1);
+    end_stripe_group = end_lpn / (spp->nchs - 1);
+    start_stripe_offset = start_lpn % (spp->nchs - 1);
+    end_stripe_offset = end_lpn % (spp->nchs - 1);
+    write_log("write 6.5, parity_start = %"PRIu64", parity_end = %"PRIu64"\n", start_lpn - start_stripe_offset, end_lpn + (spp->nchs - 1 - end_stripe_offset) - 1);
+    // Read these pages, reconstruct parity
+    if (start_lpn - start_stripe_offset < start_lpn){
+        curlat = ssd_read_pages(ssd, start_lpn - start_stripe_offset, start_lpn - 1);
+        maxlat = (curlat > maxlat) ? curlat : maxlat;
     }
-    if (spp->enable_hetero_sbsize){
-        stream_choice *= 2;
-        if (pages_written < 8){
-            offset = 0;
-        }else{
-            offset = 1;
-        }
-        stream_choice += offset;
+    
+    if (end_lpn + (spp->nchs - 1 - end_stripe_offset) - 1 > end_lpn){
+        curlat = ssd_read_pages(ssd, end_lpn + 1, end_lpn + (spp->nchs - 1 - end_stripe_offset) - 1);
+        maxlat = (curlat > maxlat) ? curlat : maxlat;
     }
-
-    si = &ssd->stream_info[stream_choice];
-
+    
+    write_log("write 7\n");
     for (lpn = start_lpn; lpn <= end_lpn; lpn++) {
-        // write_log("debug 8.1\n");
+        write_log("write 8 lpn: %"PRIu64"\n", lpn);
         
+        // write_log("debug 8.1\n");
+        // Add fixed LUN mapping based on TTFlash
+        stream_choice = lpn_to_stream(ssd, lpn);
+        write_log("[1, %"PRIu64", %"PRIu64", %d]\n", lpn, ts, stream_choice);
+        write_log("write 9 stream: %d\n", stream_choice);
+        si = &ssd->stream_info[stream_choice];
         ppa = get_maptbl_ent(ssd, lpn);
         // write_log("debug 8.2\n");
-        
+        write_log("write 10\n");
         if (mapped_ppa(&ppa)) {
             /* update old page information first */
             // write_log("debug 8.3\n");
@@ -1605,6 +1746,7 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
             
             set_rmap_ent(ssd, INVALID_LPN, &ppa);
         }
+        write_log("write 11\n");
         // write_log("debug 8.5\n");
         
         // Update the write pointer earliest/latest death time for the target block
@@ -1615,26 +1757,26 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
             si->latest_death_time = page_death_time;
         }
         // write_log("debug 10\n");
-        
+        write_log("write 12\n");
         /* new write */
         ppa = get_new_page(ssd, stream_choice);
         // write_log("debug 11\n");
-        
+        write_log("write 13 ppa: %"PRIu64"\n", ppa.ppa);
         /* update maptbl */
         set_maptbl_ent(ssd, lpn, &ppa);
         // write_log("debug 12\n");
-        
+        write_log("write 14\n");
         /* update rmap */
         set_rmap_ent(ssd, lpn, &ppa);
         // write_log("debug 13\n");
-        
+        write_log("write 15\n");
         mark_page_valid(ssd, &ppa);
         // write_log("debug 14\n");
-        
+        write_log("write 16\n");
         /* need to advance the write pointer here */
-        ssd_advance_write_pointer(ssd, stream_choice, lpn);
+        ssd_advance_write_pointer(ssd, stream_choice);
         // write_log("debug 15\n");
-        
+        write_log("write 17\n");
         struct nand_cmd swr;
         swr.type = USER_IO;
         swr.cmd = NAND_WRITE;
@@ -1642,11 +1784,51 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
         /* get latency statistics */
         curlat = ssd_advance_status(ssd, &ppa, &swr);
         maxlat = (curlat > maxlat) ? curlat : maxlat;
+        write_log("write 18\n");
         // write_log("debug 16\n");
-        
     }
-    write_log("[1, %"PRIu64", %"PRIu64", %"PRIu64", %d]\n", start_lpn, end_lpn, ts, stream_choice);
-    si->next_avail_time = maxlat;
+
+    // TODO: also need to invalidate old parity pages and write new parity pages
+    // we need to calculate how many pages we write to each stripe group
+    // and write to respective LUNs respectively
+    write_log("write 19\n");
+    for (stripe_group = start_stripe_group; stripe_group <= end_stripe_group; stripe_group++){
+        // Get the PPA of the parity page (remember parity pages do not have any LBA)
+        // Invalidate old parity page
+        write_log("write 20 stripe_group: %"PRIu64"\n", stripe_group);
+        ppa.ppa = spp->stripe_group_parity_ppa[stripe_group].ppa;
+        if (mapped_ppa(&ppa)) {
+            /* update old page information first */
+            // write_log("debug 8.3\n");
+            
+            mark_page_invalid(ssd, &ppa);
+            // write_log("debug 8.4\n");
+            
+            // Do not set rmap, since parity pages don't have LBA
+            // set_rmap_ent(ssd, INVALID_LPN, &ppa);
+        }
+        write_log("write 21\n");
+        // Get new parity page
+        parity_stream = get_stripe_group_parity_stream(ssd, stripe_group);
+        write_log("write 22 parity stream: %d\n", parity_stream);
+        ppa = get_new_page(ssd, parity_stream);
+        spp->stripe_group_parity_ppa[stripe_group].ppa = ppa.ppa;
+        write_log("write 23\n");
+        mark_page_valid(ssd, &ppa);
+        write_log("write 24\n");
+        ssd_advance_write_pointer(ssd, parity_stream);
+        write_log("write 25\n");
+        struct nand_cmd swr;
+        swr.type = USER_IO;
+        swr.cmd = NAND_WRITE;
+        swr.stime = req->stime;
+        /* get latency statistics */
+        curlat = ssd_advance_status(ssd, &ppa, &swr);
+        maxlat = (curlat > maxlat) ? curlat : maxlat;
+        write_log("write 26\n");
+    }
+
+    write_log("write 27\n");
     //write_log("----Write start LPN: %"PRIu64", end LPN: %"PRIu64", given stream: %d, now end----\n", start_lpn, end_lpn, dspec);
     return maxlat;
 }
@@ -1654,6 +1836,7 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
 // DZ Start
 static void ssd_dsm(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req){
     // Mostly adapted from nvme_dsm() in nvme-io.c.
+    write_log("dsm 1\n");
     uint64_t lba = req->slba;
     struct ssdparams *spp = &ssd->sp;
     int len = req->nlb;
@@ -1661,16 +1844,17 @@ static void ssd_dsm(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req){
     uint64_t lpn;
     uint64_t start_lpn;
     uint64_t end_lpn;
-
+    write_log("dsm 2\n");
     if (req->cmd.cdw11 & NVME_DSMGMT_AD){
         uint16_t nr = (req->cmd.cdw10 & 0xff) + 1;
         NvmeDsmRange range[nr];
-        
+        write_log("dsm 3\n");
         // FEMU will handle the real I/O request first
         // and also finished all sanity check on DSM range.
         // See nvme_dsm() in nvme-io.c.
         // However, we still need to get range information using this function.
         dma_write_prp(n, (uint8_t *)range, sizeof(range), req->cmd.dptr.prp1, req->cmd.dptr.prp2);
+        write_log("dsm 4\n");
         // We can skip sanity check here.
         for (int i = 0; i < nr; i++) {
             lba = le64_to_cpu(range[i].slba);
@@ -1682,8 +1866,10 @@ static void ssd_dsm(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req){
             if (end_lpn >= spp->tt_pgs) {
                 ftl_err("start_lpn=%"PRIu64",tt_pgs=%d\n", start_lpn, ssd->sp.tt_pgs);
             }
+            write_log("dsm 5\n");
             // Mark these pages as invalid
             for (lpn = start_lpn; lpn <= end_lpn; lpn++) {
+                write_log("dsm 6 lpn = %"PRIu64"\n", lpn);
                 ppa = get_maptbl_ent(ssd, lpn);
                 if (mapped_ppa(&ppa)) {
                     // This physical page is invalid now
@@ -1692,12 +1878,17 @@ static void ssd_dsm(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req){
                     ssd->maptbl[lpn].ppa = UNMAPPED_PPA;
                     set_rmap_ent(ssd, INVALID_LPN, &ppa);
                 }
+                write_log("dsm 7\n");
             }
+            write_log("dsm 8\n");
             if (spp->death_time_prediction){
                 set_latest_access_time(n, ssd, start_lpn, end_lpn, DISCARD_OP);
             }
+            write_log("dsm 9\n");
         }
+        write_log("dsm 10\n");
     }
+    write_log("dsm 11\n");
 }
 // DZ End
 

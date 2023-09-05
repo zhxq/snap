@@ -217,6 +217,10 @@ struct ssdparams {
 
     int max_allow_gc_lines;
     double decay;
+    uint64_t *stripe_group_gc_end_time;
+    uint64_t total_stripe_groups;
+    struct ppa *stripe_group_parity_ppa;
+    int *stream_mapping;
 };
 
 typedef struct line {
@@ -355,6 +359,7 @@ struct lun_mgmt{
 
 struct channel_mgmt{
     int next_avail_channel;
+    int avail_chips;
     uint64_t next_line_id;
     struct lun_mgmt* channel;
 };
