@@ -6,8 +6,11 @@
 #include "../nvme.h"
 
 #define INVALID_PPA     (~(0ULL))
-#define INVALID_LPN     (~(0ULL))
-#define UNMAPPED_PPA    (~(0ULL))
+#define INVALID_LPN     (~(0ULL) - 1)
+#define UNMAPPED_PPA    (~(0ULL) - 2)
+
+#define INVALID_STRIPE_GROUP     (~(0ULL) - 3)
+#define UNMAPPED_STRIPE_GROUP    (~(0ULL) - 4)
 
 
 // DZ Start
@@ -219,7 +222,6 @@ struct ssdparams {
     double decay;
     uint64_t *stripe_group_gc_end_time;
     uint64_t total_stripe_groups;
-    struct ppa *stripe_group_parity_ppa;
     int *stream_mapping;
 };
 
@@ -370,13 +372,15 @@ struct ssd {
     struct ssdparams sp;
     struct ssd_channel *ch;
     struct ppa *maptbl; /* page level mapping table */
+    struct ppa *stripe_group_parity_ppa; /* stripe group -> parity page mapping table */
     // DZ Start
     // We have a structure for death time analysis, which splits LBA into chunks
     // Number of pages/chunk is defined as pages_per_chunk in FEMU start script
     struct death_time_track *death_time_list; /* page level mapping table */
     struct stream_info *stream_info;
     // DZ End
-    uint64_t *rmap;     /* reverse mapptbl, assume it's stored in OOB */
+    uint64_t *rmap;     /* reverse mapptbl (map from PPA to LBA), assume it's stored in OOB */
+    uint64_t *stripe_group_rmap; /* reverse mapptbl for stripe groups (map from PPA to stripe group), assume it's stored in OOB */
     struct write_pointer *wp; // We need multiple pointers for multi-stream SSD.
     struct line_mgmt lm;
 

@@ -84,6 +84,17 @@ static inline void set_maptbl_ent(struct ssd *ssd, uint64_t lpn, struct ppa *ppa
     ssd->maptbl[lpn] = *ppa;
 }
 
+static inline struct ppa get_stripe_group_maptbl_ent(struct ssd *ssd, uint64_t stripe_group)
+{
+    return ssd->stripe_group_parity_ppa[stripe_group];
+}
+
+static inline void set_stripe_group_maptbl_ent(struct ssd *ssd, uint64_t stripe_group, struct ppa *ppa)
+{
+    ftl_assert(stripe_group < ssd->sp.total_stripe_groups);
+    ssd->stripe_group_parity_ppa[stripe_group] = *ppa;
+}
+
 static struct seq_write_info *init_seq_write_info(const uint size){
     struct seq_write_info *s = g_malloc0(sizeof(struct seq_write_info));
     s->size = size;
@@ -274,6 +285,23 @@ static inline void set_rmap_ent(struct ssd *ssd, uint64_t lpn, struct ppa *ppa)
     ssd->rmap[pgidx] = lpn;
 }
 
+
+static inline int get_stripe_group_rmap_ent(struct ssd *ssd, struct ppa *ppa)
+{
+    uint64_t pgidx = ppa2pgidx(ssd, ppa);
+
+    return ssd->stripe_group_rmap[pgidx];
+}
+
+/* set stripe_group_rmap[page_no(ppa)] -> stripe_group */
+static inline void set_stripe_group_rmap_ent(struct ssd *ssd, uint64_t stripe_group, struct ppa *ppa)
+{
+    uint64_t pgidx = ppa2pgidx(ssd, ppa);
+
+    ssd->stripe_group_rmap[pgidx] = stripe_group;
+}
+
+
 static inline int victim_line_cmp_pri(pqueue_pri_t next, pqueue_pri_t curr)
 {
     return (next > curr);
@@ -344,6 +372,7 @@ static struct line* create_line(struct ssd *ssd, int stream){
             line->inserted_to_victim_queue[i][j] = false;
         }
     }
+    channel_mgmt->next_avail_channel = stream % spp->nchs;
     for (j = 0; j < line->total_channels; j++){
         // write_log("j = %d\n", j);
         
@@ -368,13 +397,13 @@ static struct line* create_line(struct ssd *ssd, int stream){
             // 1, 1
             // ... 
             // 7, 7
-            channel_mgmt->next_avail_channel = stream % spp->nchs;
+            
             lun_mgmt->next_avail_lun = stream / spp->nchs;
             
             write_log("line ID = %d, stream = %d, channel = %d, LUN = %d\n", line->id, stream, channel_mgmt->next_avail_channel, lun_mgmt->next_avail_lun);
             block_mgmt = &lun_mgmt->lun[lun_mgmt->next_avail_lun];
             if (block_mgmt->free_blocks_cnt == 0){
-                continue;
+                return NULL;
             }
             block_num = QTAILQ_FIRST(&block_mgmt->free_block_list);
             QTAILQ_REMOVE(&block_mgmt->free_block_list, block_num, entry);
@@ -384,7 +413,6 @@ static struct line* create_line(struct ssd *ssd, int stream){
             g_free(block_num);
             lm->channel_lines[line->block_list[j][k]][line->channel_list[j]][line->lun_list[j][k]] = line;
             line->pgs_per_line += spp->pgs_per_blk;
-            lun_mgmt->next_avail_lun = (lun_mgmt->next_avail_lun + 1) % spp->luns_per_ch;
         }
     }
     channel_mgmt->next_line_id++;
@@ -503,11 +531,21 @@ static struct line *get_next_free_line(struct ssd *ssd, int stream)
     curline = create_line(ssd, stream);
     if (!curline) {
         ftl_err("No free lines left in [%s] !!!!\n", ssd->ssdname);
+        write_log("No free blocks left in [%s] for stream %d !!!!\n", ssd->ssdname, stream);
         return NULL;
     }
 
     return curline;
 }
+
+
+// DEBUG TODO
+// void translation(uint64_t addr){
+//     struct ppa ppa;
+//     ppa.ppa = addr;
+//     printf("ch %d, lun %d, blk %d, pg %d\n", ppa.g.ch, ppa.g.lun, ppa.g.blk, ppa.g.pg);
+// }
+
 
 static void ssd_advance_write_pointer(struct ssd *ssd, uint8_t stream)
 {
@@ -811,10 +849,15 @@ static void ssd_init_ch(struct ssd_channel *ch, struct ssdparams *spp)
 static void ssd_init_maptbl(struct ssd *ssd)
 {
     struct ssdparams *spp = &ssd->sp;
-
+    int i;
     ssd->maptbl = g_malloc0(sizeof(struct ppa) * spp->tt_pgs);
-    for (int i = 0; i < spp->tt_pgs; i++) {
+    for (i = 0; i < spp->tt_pgs; i++) {
         ssd->maptbl[i].ppa = UNMAPPED_PPA;
+    }
+    
+    ssd->stripe_group_parity_ppa = g_malloc0(sizeof(struct ppa) * spp->total_stripe_groups);
+    for (i = 0; i < spp->total_stripe_groups; i++){
+        ssd->stripe_group_parity_ppa[i].ppa = UNMAPPED_STRIPE_GROUP;
     }
 }
 
@@ -839,10 +882,15 @@ static void ssd_init_death_time(struct ssd *ssd, uint32_t pages_per_chunk)
 static void ssd_init_rmap(struct ssd *ssd)
 {
     struct ssdparams *spp = &ssd->sp;
-
+    int i;
     ssd->rmap = g_malloc0(sizeof(uint64_t) * spp->tt_pgs);
-    for (int i = 0; i < spp->tt_pgs; i++) {
+    for (i = 0; i < spp->tt_pgs; i++) {
         ssd->rmap[i] = INVALID_LPN;
+    }
+
+    ssd->stripe_group_rmap = g_malloc0(sizeof(uint64_t) * spp->tt_pgs);
+    for (i = 0; i < spp->total_stripe_groups; i++) {
+        ssd->stripe_group_rmap[i] = INVALID_STRIPE_GROUP;
     }
 }
 
@@ -893,25 +941,22 @@ void ssd_init(FemuCtrl *n)
     spp->access_interval_precision = n->access_interval_precision;
     spp->enable_hetero_sbsize = n->enable_hetero_sbsize;
     spp->total_stripe_groups = (spp->tt_pgs / (spp->luns_per_ch - 1)) + 1;
-    spp->stripe_group_parity_ppa = g_malloc0(sizeof(struct ppa) * spp->total_stripe_groups);
-    for (i = 0; i < spp->total_stripe_groups; i++){
-        spp->stripe_group_parity_ppa[i].ppa = UNMAPPED_PPA;
-    }
+    
 
-    int j;
+    int j, k;
     
     spp->stream_mapping = malloc(sizeof(int) * (spp->nchs - 1) * spp->luns_per_ch);
     
     int mapping_loc = 0;
-    for (i = 0; i < spp->nchs * spp->luns_per_ch; i++){
-        j = i % (spp->nchs * spp->nchs);
+    for (k = 0; k < spp->nchs * spp->luns_per_ch; k++){
+        j = k % (spp->nchs * spp->nchs);
         if (j % (spp->nchs - 1) == 0 && j != 0){
             if (j + 1 == spp->nchs * spp->nchs){
-                spp->stream_mapping[mapping_loc] = i;
+                spp->stream_mapping[mapping_loc] = k;
                 mapping_loc += 1;
             }
         }else{
-            spp->stream_mapping[mapping_loc] = i;
+            spp->stream_mapping[mapping_loc] = k;
             mapping_loc += 1;
         }
     }
@@ -967,9 +1012,14 @@ static inline bool valid_lpn(struct ssd *ssd, uint64_t lpn)
     return (lpn < ssd->sp.tt_pgs);
 }
 
+static inline bool valid_stripe_group(struct ssd *ssd, uint64_t stripe_group)
+{
+    return (stripe_group < ssd->sp.total_stripe_groups);
+}
+
 static inline bool mapped_ppa(struct ppa *ppa)
 {
-    return !(ppa->ppa == UNMAPPED_PPA);
+    return !(ppa->ppa == UNMAPPED_PPA || ppa->ppa == UNMAPPED_STRIPE_GROUP);
 }
 
 static inline struct ssd_channel *get_ch(struct ssd *ssd, struct ppa *ppa)
@@ -1004,6 +1054,47 @@ static inline struct nand_page *get_pg(struct ssd *ssd, struct ppa *ppa)
 {
     struct nand_block *blk = get_blk(ssd, ppa);
     return &(blk->pg[ppa->g.pg]);
+}
+
+static bool lun_is_gcing(struct ssd *ssd, struct ppa *ppa){
+    struct nand_lun *lun = get_lun(ssd, ppa);
+    uint64_t time = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+    if (time <= lun->gc_endtime){
+        return true;
+    }
+    return false;
+}
+
+static int get_needed_LUN_id_before_parity(struct ssd *ssd, uint64_t lpn){
+    struct ssdparams *spp = &ssd->sp;
+    return lpn % ((spp->nchs - 1) * spp->luns_per_ch);
+}
+
+// Map an LPN to a LUN stream
+static int lpn_to_stream(struct ssd *ssd, uint64_t lpn){
+    struct ssdparams *spp = &ssd->sp;
+    int lun = get_needed_LUN_id_before_parity(ssd, lpn);
+    return spp->stream_mapping[lun];
+}
+
+// Get the parity LUN stream ID based on a stripe group
+static int get_stripe_group_parity_stream(struct ssd *ssd, uint64_t stripe_group){
+    struct ssdparams *spp = &ssd->sp;
+    stripe_group = stripe_group % spp->luns_per_ch;
+    int row_start = stripe_group * spp->nchs;
+    int n = spp->nchs - 1 - stripe_group % spp->nchs;
+    return row_start + n;
+}
+
+// Get the parity LUN stream ID based on a stream ID
+static int get_stream_parity_stream(struct ssd *ssd, int stream){
+    struct ssdparams *spp = &ssd->sp;
+    int stripe_group = stream / spp->nchs;
+    return get_stripe_group_parity_stream(ssd, stripe_group);
+}
+
+static bool is_parity_stream(struct ssd *ssd, int stream){
+    return get_stream_parity_stream(ssd, stream) == stream;
 }
 
 static uint64_t ssd_advance_status(struct ssd *ssd, struct ppa *ppa, struct
@@ -1094,6 +1185,9 @@ static void mark_page_invalid(struct ssd *ssd, struct ppa *ppa)
     
     /* update corresponding page status */
     pg = get_pg(ssd, ppa);
+    if (pg->status != PG_VALID){
+        write_log("mark_page_invalid %"PRIu64" state = %d\n", ppa->ppa, pg->status);
+    }
     ftl_assert(pg->status == PG_VALID);
     pg->status = PG_INVALID;
     // write_log("debug 8.3.4\n");
@@ -1187,11 +1281,14 @@ static void mark_block_free(struct ssd *ssd, struct ppa *ppa)
     struct nand_block *blk = get_blk(ssd, ppa);
     struct nand_page *pg = NULL;
     struct block_num *block_num = NULL;
+    struct ppa test_ppa = *ppa;
     for (int i = 0; i < spp->pgs_per_blk; i++) {
         /* reset page status */
         pg = &blk->pg[i];
         ftl_assert(pg->nsecs == spp->secs_per_pg);
         pg->status = PG_FREE;
+        test_ppa.g.pg = i;
+        write_log("Marking %"PRIu64" free\n", test_ppa.ppa);
     }
 
     block_num = g_malloc0(sizeof(struct block_num));
@@ -1228,24 +1325,60 @@ static uint64_t gc_write_page(struct ssd *ssd, struct ppa *old_ppa)
     struct line *old_line = get_line(ssd, old_ppa);
     // write_log("debug gcwp 1\n");
     
-    uint64_t lpn = get_rmap_ent(ssd, old_ppa);
+    uint64_t lpn;
+    uint64_t stripe_group;
     // write_log("debug gcwp 2\n");
     
-    ftl_assert(valid_lpn(ssd, lpn));
-    // For garbage collection, we just assign stream 0
-    // since our previous guess of lifetime failed
+    // No need to assert LPN is valid now,
+    // since parity pages do not have LPN
+    // ftl_assert(valid_lpn(ssd, lpn));
+
+    // However, when there is a valid LPN (e.g., normal, non-parity LUNs),
+    // we have to remap LPN <-> PPN
     // write_log("debug gcwp 3\n");
     
+    // Assign a new page, but need to be in the same chip/channel
     new_ppa = get_new_page(ssd, old_line->stream);
     /* update maptbl */
     // write_log("debug gcwp 4\n");
     
-    set_maptbl_ent(ssd, lpn, &new_ppa);
-    // write_log("debug gcwp 5\n");
+    // Update the mapping
+    // TODO: Current problem:
+        // When the SSD is doing GC,
+        // When it's doing GC for a parity chip,
+        // It does not update the stripe group -> parity page PPA table.
+        // Causing errors stating mark_page_invalid (PPA) state = 0 (PG_FREE)
+
+        // Maybe add some logs here and show if this is a parity stream?
+        // Seems like when doing GC, the GC'ed stripe_groups/ppas are not the one we have intended
+        // ppa is PG_FREE, but this is never reflected in GC (because they were not iterated)
+    write_log("gc_write: old ppn = %"PRIu64"\n", old_ppa->ppa);
+    if (is_parity_stream(ssd, old_line->stream)){
+        write_log("gc_write: parity old stream = %d\n", old_line->stream);
+        stripe_group = get_stripe_group_rmap_ent(ssd, old_ppa);
+        write_log("gc_write: old stripe_group = %"PRIu64"\n", stripe_group);
+        if (valid_stripe_group(ssd, stripe_group)){
+            write_log("gc_write: setting new stripe group = %"PRIu64", ppa = %"PRIu64"\n", stripe_group, new_ppa.ppa);
+            set_stripe_group_maptbl_ent(ssd, stripe_group, &new_ppa);
+
+            /* update rmap */
+            set_stripe_group_rmap_ent(ssd, stripe_group, &new_ppa);
+        }
+    }else{
+        write_log("gc_write: normal old stream = %d\n", old_line->stream);
+        lpn = get_rmap_ent(ssd, old_ppa);
+        write_log("gc_write: old lpn = %"PRIu64"\n", lpn);
+        if (valid_lpn(ssd, lpn)){
+            write_log("gc_write: setting new lpn = %"PRIu64", ppa = %"PRIu64"\n", lpn, new_ppa.ppa);
+            set_maptbl_ent(ssd, lpn, &new_ppa);
+            // write_log("debug gcwp 5\n");
+            
+            /* update rmap */
+            set_rmap_ent(ssd, lpn, &new_ppa);
+            // write_log("debug gcwp 6\n");
+        }
+    }
     
-    /* update rmap */
-    set_rmap_ent(ssd, lpn, &new_ppa);
-    // write_log("debug gcwp 6\n");
     
     mark_page_valid(ssd, &new_ppa);
     // write_log("debug gcwp 7\n");
@@ -1407,7 +1540,7 @@ static int do_gc(struct ssd *ssd, bool force)
     int result = -1;
     int channel_end = spp->gc_start_channel + spp->nchs;
     int lun_end = spp->gc_start_lun + spp->luns_per_ch;
-    ppa.ppa = INVALID_PPA;
+    ppa.ppa = 0;
     
     for (loopi = spp->gc_start_channel; loopi < channel_end; loopi++){
         i = loopi % spp->nchs;
@@ -1427,8 +1560,6 @@ static int do_gc(struct ssd *ssd, bool force)
                 result = 0;
             }
 
-            // Line ID, Invalid count, Valid count, Total channels, Total luns, Victim line stream ID, channel, lun, Force
-            write_log("[3, %d, %d, %d, %d, %d, %d, %d, %d, %d]\n", victim_line->id, victim_line->ipc, victim_line->vpc, victim_line->total_channels, victim_line->total_luns[i], victim_line->stream, i, j, force);
 
             /* copy back valid data */
             for (ch = 0; ch < victim_line->total_channels; ch++) {
@@ -1437,6 +1568,8 @@ static int do_gc(struct ssd *ssd, bool force)
                     ppa.g.lun = victim_line->lun_list[ch][lun]; // This should be put to ppa.g.ch and ppa.g.blk when we exploit chip level parallelism
                     ppa.g.pl = 0;
                     ppa.g.blk = victim_line->block_list[ch][lun];
+                    // Line ID, Invalid count, Valid count, Total channels, Total luns, Victim line stream ID, channel, lun, Force
+                    write_log("[3, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d]\n", victim_line->id, victim_line->ipc, victim_line->vpc, victim_line->total_channels, victim_line->total_luns[0], victim_line->stream, ppa.g.ch, ppa.g.lun, ppa.g.blk, force);
                     // ftl_debug("GC-ing line:%d,ch:%d,lun:%d,blk:%d,ipc=%d,victim=%d,full=%d,free=%d,hostpgs=%"PRIu64",gcpgs=%"PRIu64"\n", victim_line->id, ch, lun, ppa.g.blk,
                     //   victim_line->ipc, ssd->lm.victim_line_cnt, ssd->lm.full_line_cnt,
                     //   ssd->lm.free_line_cnt, ssd->pages_from_host, ssd->pages_from_gc);
@@ -1455,7 +1588,7 @@ static int do_gc(struct ssd *ssd, bool force)
                     lunp->gc_endtime = lunp->next_lun_avail_time;
                 }
             }
-            assert(ppa.ppa != INVALID_PPA);
+            assert(valid_ppa(ssd, &ppa));
             /* update line status */
             // There might be a possibility that that block/channel/lun combination is used
             // So we pass the line (instead of a PPA)
@@ -1472,42 +1605,7 @@ static int do_gc(struct ssd *ssd, bool force)
     return result;
 }
 
-static bool lun_is_gcing(struct ssd *ssd, struct ppa *ppa){
-    struct nand_lun *lun = get_lun(ssd, ppa);
-    uint64_t time = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
-    if (time <= lun->gc_endtime){
-        return true;
-    }
-    return false;
-}
 
-static int get_needed_LUN_id_before_parity(struct ssd *ssd, uint64_t lpn){
-    struct ssdparams *spp = &ssd->sp;
-    return lpn % ((spp->nchs - 1) * spp->luns_per_ch);
-}
-
-// Map an LPN to a LUN stream
-static int lpn_to_stream(struct ssd *ssd, uint64_t lpn){
-    struct ssdparams *spp = &ssd->sp;
-    int lun = get_needed_LUN_id_before_parity(ssd, lpn);
-    return spp->stream_mapping[lun];
-}
-
-// Get the parity LUN stream ID based on a stripe group
-static int get_stripe_group_parity_stream(struct ssd *ssd, uint64_t stripe_group){
-    struct ssdparams *spp = &ssd->sp;
-    stripe_group = stripe_group % spp->luns_per_ch;
-    int row_start = stripe_group * spp->nchs;
-    int n = spp->nchs - 1 - stripe_group % spp->nchs;
-    return row_start + n;
-}
-
-// // Get the parity LUN stream ID based on a stream ID
-// static int get_stream_parity_stream(struct ssd *ssd, int stream){
-//     struct ssdparams *spp = &ssd->sp;
-//     int stripe_group = stream / spp->nchs;
-//     return get_stripe_group_parity_stream(ssd, stripe_group);
-// }
 
 static uint64_t ssd_read_pages(struct ssd *ssd, uint64_t start_lpn, uint64_t end_lpn){
     struct ssdparams *spp = &ssd->sp;
@@ -1564,19 +1662,18 @@ static uint64_t ssd_read_pages(struct ssd *ssd, uint64_t start_lpn, uint64_t end
             }
 
             // TODO: reading parity page is also required
-            parity_ppa.ppa = spp->stripe_group_parity_ppa[this_stripe_group].ppa;
+            parity_ppa = get_stripe_group_maptbl_ent(ssd, this_stripe_group);
             if (!mapped_ppa(&parity_ppa) || !valid_ppa(ssd, &parity_ppa)) {
                 //printf("%s,lpn(%" PRId64 ") not mapped to valid ppa\n", ssd->ssdname, lpn);
                 //printf("Invalid ppa,ch:%d,lun:%d,blk:%d,pl:%d,pg:%d,sec:%d\n",
                 //ppa.g.ch, ppa.g.lun, ppa.g.blk, ppa.g.pl, ppa.g.pg, ppa.g.sec);
                 write_log("Error: stripe_group %"PRIu64": invalid parity ppa @ %"PRIu64"\n", this_stripe_group, parity_ppa.ppa);
             }
-            struct nand_cmd srd;
-            srd.type = USER_IO;
-            srd.cmd = NAND_READ;
-            // change the model of reads - if GC, then we can hide GC latency
-            sublat = ssd_advance_status(ssd, &parity_ppa, &srd);
-            maxlat = (sublat > maxlat) ? sublat : maxlat;
+            
+            // Since this page is on a currently-GC'ing chip,
+            // we skip the reading of this page, and read the next page
+            // since we can reconstruct from other pages
+            continue;
         }
         write_log("read 4\n");
         
@@ -1667,11 +1764,12 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
     uint64_t start_stripe_offset = -1;
     uint64_t end_stripe_offset = -1;
     uint64_t stripe_group;
+    int parity_stream = 0;
     // write_log("debug 4\n");
     
     // uint64_t prev_starter = start_lpn;
     int stream_choice = 0;
-    int parity_stream = 0;
+    
     // int i;
     int r;
     uint64_t ts = qemu_clock_get_us(QEMU_CLOCK_REALTIME);
@@ -1736,15 +1834,16 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
         si = &ssd->stream_info[stream_choice];
         ppa = get_maptbl_ent(ssd, lpn);
         // write_log("debug 8.2\n");
-        write_log("write 10\n");
+        write_log("write 10 ppa: %"PRIu64"\n", ppa.ppa);
         if (mapped_ppa(&ppa)) {
             /* update old page information first */
             // write_log("debug 8.3\n");
-            
+            write_log("write 10.1 ppa: %"PRIu64"\n", ppa.ppa);
             mark_page_invalid(ssd, &ppa);
             // write_log("debug 8.4\n");
             
             set_rmap_ent(ssd, INVALID_LPN, &ppa);
+            write_log("write 10.9\n");
         }
         write_log("write 11\n");
         // write_log("debug 8.5\n");
@@ -1796,8 +1895,10 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
         // Get the PPA of the parity page (remember parity pages do not have any LBA)
         // Invalidate old parity page
         write_log("write 20 stripe_group: %"PRIu64"\n", stripe_group);
-        ppa.ppa = spp->stripe_group_parity_ppa[stripe_group].ppa;
+        ppa = get_stripe_group_maptbl_ent(ssd, stripe_group);
         if (mapped_ppa(&ppa)) {
+            write_log("write 20.1 old ppa: %"PRIu64"\n", ppa.ppa);
+            write_log("write 20.2 line id: %d\n", get_line(ssd, &ppa)->id);
             /* update old page information first */
             // write_log("debug 8.3\n");
             
@@ -1805,19 +1906,23 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
             // write_log("debug 8.4\n");
             
             // Do not set rmap, since parity pages don't have LBA
-            // set_rmap_ent(ssd, INVALID_LPN, &ppa);
+            // But we need to set stripe group rmap for GC use
+            set_stripe_group_rmap_ent(ssd, INVALID_STRIPE_GROUP, &ppa);
         }
-        write_log("write 21\n");
+        write_log("write 21 old ppa: %"PRIu64"\n", ppa.ppa);
         // Get new parity page
         parity_stream = get_stripe_group_parity_stream(ssd, stripe_group);
         write_log("write 22 parity stream: %d\n", parity_stream);
         ppa = get_new_page(ssd, parity_stream);
-        spp->stripe_group_parity_ppa[stripe_group].ppa = ppa.ppa;
-        write_log("write 23\n");
-        mark_page_valid(ssd, &ppa);
+        write_log("write 23 new ppa: %"PRIu64"\n", ppa.ppa);
+        set_stripe_group_maptbl_ent(ssd, stripe_group, &ppa);
         write_log("write 24\n");
-        ssd_advance_write_pointer(ssd, parity_stream);
+        set_stripe_group_rmap_ent(ssd, stripe_group, &ppa);
         write_log("write 25\n");
+        mark_page_valid(ssd, &ppa);
+        write_log("write 26\n");
+        ssd_advance_write_pointer(ssd, parity_stream);
+        write_log("write 27\n");
         struct nand_cmd swr;
         swr.type = USER_IO;
         swr.cmd = NAND_WRITE;
@@ -1825,10 +1930,10 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
         /* get latency statistics */
         curlat = ssd_advance_status(ssd, &ppa, &swr);
         maxlat = (curlat > maxlat) ? curlat : maxlat;
-        write_log("write 26\n");
+        write_log("write 28\n");
     }
 
-    write_log("write 27\n");
+    write_log("write 29\n");
     //write_log("----Write start LPN: %"PRIu64", end LPN: %"PRIu64", given stream: %d, now end----\n", start_lpn, end_lpn, dspec);
     return maxlat;
 }
@@ -1871,10 +1976,12 @@ static void ssd_dsm(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req){
             for (lpn = start_lpn; lpn <= end_lpn; lpn++) {
                 write_log("dsm 6 lpn = %"PRIu64"\n", lpn);
                 ppa = get_maptbl_ent(ssd, lpn);
+                write_log("dsm 6.5 ppa: %"PRIu64"\n", ppa.ppa);
                 if (mapped_ppa(&ppa)) {
                     // This physical page is invalid now
                     mark_page_invalid(ssd, &ppa);
                     // This LPN is also invalid now
+                    ftl_assert(lpn < ssd->sp.tt_pgs);
                     ssd->maptbl[lpn].ppa = UNMAPPED_PPA;
                     set_rmap_ent(ssd, INVALID_LPN, &ppa);
                 }
