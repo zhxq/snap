@@ -906,6 +906,7 @@ void ssd_init(FemuCtrl *n)
     ssd->pages_from_host = 0;
     ssd->pages_from_gc = 0;
     ssd->pages_read = 0;
+    ssd->pages_from_parity = 0;
     struct ssdparams *spp = &ssd->sp;
 
     ftl_assert(ssd);
@@ -1918,6 +1919,7 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
         curlat = ssd_advance_status(ssd, &ppa, &swr);
         maxlat = (curlat > maxlat) ? curlat : maxlat;
         write_log("write 18\n");
+        ssd->pages_from_parity++;
         // write_log("debug 16\n");
     }
 

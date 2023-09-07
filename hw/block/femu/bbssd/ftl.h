@@ -328,11 +328,6 @@ struct death_time_track{
 };
 */
 
-struct wa_info {
-    uint64_t pages_from_host;
-    uint64_t pages_from_gc;
-    uint64_t pages_read;
-};
 
 struct death_time_track {
     uint64_t death_time_avg    : TIME_PREC_BITS;
@@ -398,6 +393,7 @@ struct ssd {
     bool *dataplane_started_ptr;
     QemuThread ftl_thread;
     uint64_t pages_from_host;
+    uint64_t pages_from_parity;
     uint64_t pages_from_gc;
     uint64_t pages_read;
     struct seq_write_info *seq_info;
