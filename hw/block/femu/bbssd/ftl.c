@@ -740,8 +740,6 @@ static void ssd_init_params(struct ssdparams *spp)
     spp->pls_per_lun = 1;
     spp->luns_per_ch = 8;
     spp->nchs = 8;
-    spp->gc_start_channel = 0;
-    spp->gc_start_lun = 0;
     //spp->min_channels_per_line = spp->nchs / spp->channel_regions;
     //spp->min_channels_per_line = spp->default_channels_per_line;
 
@@ -1559,24 +1557,44 @@ static int do_gc(struct ssd *ssd, bool force)
     int loopi, loopj;
     int i, j;
     int result = -1;
-    int channel_end = spp->gc_start_channel + spp->nchs;
-    int lun_end = spp->gc_start_lun + spp->luns_per_ch;
+    int channel_end = spp->nchs;
+    int lun_end = spp->luns_per_ch;
+    bool no_gc_for_this_stripe_group = false;
+    uint64_t ts = qemu_clock_get_us(QEMU_CLOCK_REALTIME);
     ppa.ppa = 0;
-    
-    for (loopi = spp->gc_start_channel; loopi < channel_end; loopi++){
-        i = loopi % spp->nchs;
-        for (loopj = spp->gc_start_lun; loopj < lun_end; loopj++){
-            j = loopj % spp->luns_per_ch;
+    for (loopj = 0; spp->luns_per_ch; loopj++){
+        no_gc_for_this_stripe_group = false;
+
+        for (loopi = 0; loopi < spp->nchs; loopi++){
             // write_log("[8, %d, %d, %d, %d]\n", loopi, loopj, i, j);
             if (!should_gc_channel_lun(ssd, i, j, force)){
-                spp->gc_start_lun = (j + 1) % spp->luns_per_ch;
                 continue;
             }
-
+            if (!force){
+                // Check if other LUNs in the same stripe group are doing GC right now
+                ppa.ppa = 0;
+                // Remember LUNs from the same stripe group has the same LUN number, but on different channels
+                // So we iterate through all channels with the same LUN number
+                for (ch = 0; ch < victim_line->total_channels; ch++) {
+                    ppa.g.ch = ch;
+                    ppa.g.lun = loopj;
+                    lunp = get_lun(ssd, &ppa);
+                    if (ts < lunp->gc_endtime){
+                        // Don't do GC - some other LUN in the same stripe group is doing GC right now
+                        no_gc_for_this_stripe_group = true;
+                    }
+                }
+                ppa.ppa = 0;
+                if (no_gc_for_this_stripe_group){
+                    // We should skip the checking for the rest of this stripe group 
+                    // and aim for the next stripe group (by loopj++)
+                    break; 
+                }
+            }
+            
             victim_line = select_victim_line(ssd, i, j, force);
             if (!victim_line) {
-                spp->gc_start_lun = (j + 1) % spp->luns_per_ch;
-                return result;
+                continue;
             }else{
                 result = 0;
             }
@@ -1614,13 +1632,7 @@ static int do_gc(struct ssd *ssd, bool force)
             // There might be a possibility that that block/channel/lun combination is used
             // So we pass the line (instead of a PPA)
             mark_line_free(ssd, victim_line);
-            spp->gc_start_lun = (j + 1) % spp->luns_per_ch;
-            if (j + 1 >= spp->luns_per_ch){
-                spp->gc_start_channel = (i + 1) % spp->nchs;
-            }
-            return result;
         }
-        spp->gc_start_channel = (i + 1) % spp->nchs;
     }
 
     return result;
