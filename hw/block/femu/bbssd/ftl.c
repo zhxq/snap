@@ -906,6 +906,7 @@ void ssd_init(FemuCtrl *n)
     ssd->pages_from_host = 0;
     ssd->pages_from_gc = 0;
     ssd->pages_read = 0;
+    ssd->pages_from_parity = 0;
     struct ssdparams *spp = &ssd->sp;
 
     ftl_assert(ssd);
@@ -1555,10 +1556,7 @@ static int do_gc(struct ssd *ssd, bool force)
     struct ppa ppa;
     int ch, lun;
     int loopi, loopj;
-    int i, j;
     int result = -1;
-    int channel_end = spp->nchs;
-    int lun_end = spp->luns_per_ch;
     bool no_gc_for_this_stripe_group = false;
     uint64_t ts = qemu_clock_get_us(QEMU_CLOCK_REALTIME);
     ppa.ppa = 0;
@@ -1567,7 +1565,7 @@ static int do_gc(struct ssd *ssd, bool force)
 
         for (loopi = 0; loopi < spp->nchs; loopi++){
             // write_log("[8, %d, %d, %d, %d]\n", loopi, loopj, i, j);
-            if (!should_gc_channel_lun(ssd, i, j, force)){
+            if (!should_gc_channel_lun(ssd, loopi, loopj, force)){
                 continue;
             }
             if (!force){
@@ -1592,7 +1590,7 @@ static int do_gc(struct ssd *ssd, bool force)
                 }
             }
             
-            victim_line = select_victim_line(ssd, i, j, force);
+            victim_line = select_victim_line(ssd, loopi, loopj, force);
             if (!victim_line) {
                 continue;
             }else{
@@ -1918,6 +1916,7 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
         curlat = ssd_advance_status(ssd, &ppa, &swr);
         maxlat = (curlat > maxlat) ? curlat : maxlat;
         write_log("write 18\n");
+        ssd->pages_from_parity++;
         // write_log("debug 16\n");
     }
 
