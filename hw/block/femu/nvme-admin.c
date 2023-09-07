@@ -1,4 +1,5 @@
 #include "./nvme.h"
+#include "./bbssd/ftl.h"
 
 #define NVME_IDENTIFY_DATA_SIZE 4096
 
@@ -703,6 +704,70 @@ static uint16_t nvme_error_log_info(FemuCtrl *n, NvmeCmd *cmd, uint32_t buf_len)
 
 static uint16_t nvme_smart_info(FemuCtrl *n, NvmeCmd *cmd, uint32_t buf_len)
 {
+//    FILE *fp_wa = NULL;
+//    struct line_mgmt *lm = &(n->ssd->lm);
+//    struct ssd *ssd = n->ssd;
+//    double wa = (ssd->pages_from_host + ssd->pages_from_gc + ssd->pages_from_parity)*1.0 / ssd->pages_from_host;
+//    struct line *line;
+//    struct ssdparams *spp = &ssd->sp;
+//    unsigned long long util = 0;
+//    for (int i = 0; i < spp->nchs; i++){
+//        for (int j = 0; j < spp->luns_per_ch; j++){
+//            if (should_gc_channel_lun(ssd, i, j, true)){
+//                return true;
+//            }
+//        }
+//    }
+//    for (int i = 0; i < lm->tt_lines; i++) {
+//        line = &lm->lines[i];
+//        util += line->vpc;
+//    }
+//
+//    fp_wa = fopen("/media/tmp_sdc/snap/build-femu/wa.log", "a+");
+//    fprintf(fp_wa, "WA=%.3f, avg_ec: %d, CV_moderate: %d, acceleration: %d, util: %.1f(GB), pages from Host: %"PRIu64", pages from GC: %"PRIu64", pages from WL: %"PRIu64", read retry: %"PRIu64", bad_line_cnt = %d, pages_from_host_read=%"PRIu64", host_read_block=%"PRIu64", host_write_block=%"PRIu64"\n", wa, (n->ssd->sp).total_ec/(n->ssd->sp).tt_blks, n->ssd->cv_moderate, (n->ssd->sp).acceleration, util*4.0/1024/1024, (n->ssd->sp).pages_from_host, (n->ssd->sp).pages_from_gc, (n->ssd->sp).pages_from_wl, (n->ssd->sp).read_retry, lm->bad_line_cnt, (n->ssd->sp).pages_from_host_read, (n->ssd->sp).host_read_block, (n->ssd->sp).host_write_block);
+//    fclose(fp_wa);
+//    (n->ssd->sp).pages_from_gc = 0;
+//    (n->ssd->sp).pages_from_host = 0;
+//    (n->ssd->sp).pages_from_wl = 0;
+//    (n->ssd->sp).pages_from_host_read = 0;
+//    (n->ssd->sp).host_read_block = 0;
+//    (n->ssd->sp).host_write_block = 0;
+//
+//    ftl_log("Free_line_cnt = %d, util: %.1f(GB), full_line_cnt = %d, victim_line_cnt = %d, bad_line_cnt = %d, read_retry_cnt=%"PRIu64", pages_from_host_read=%"PRIu64", host_read_block=%"PRIu64", host_write_block=%"PRIu64"\n",lm->free_line_cnt, util*4.0/1024/1024, lm->full_line_cnt, lm->victim_line_cnt, lm->bad_line_cnt, (n->ssd->sp).read_retry, (n->ssd->sp).pages_from_host_read, (n->ssd->sp).host_read_block, (n->ssd->sp).host_write_block);
+//    (n->ssd->sp).read_retry = 0;
+//    FILE *fp= fopen("/media/tmp_sdc/autostream_femu2/build-femu/ec.log", "a+");
+//    if (fp != NULL) {
+//        int* records = g_malloc0(sizeof(int) * (n->ssd->sp).tt_blks);
+//        int chs = (n->ssd->sp).nchs;
+//        int luns = (n->ssd->sp).luns_per_ch;
+//        int pls = (n->ssd->sp).pls_per_lun;
+//        int blks = (n->ssd->sp).blks_per_pl;
+//        int i,j,k,m = 0;
+//        for (i = 0; i < chs; i++) {
+//            struct ssd_channel *c = &(n->ssd->ch[i]);
+//            for (j = 0; j < luns; j++) {
+//                struct nand_lun *l = &(c->lun[j]);
+//                for (k = 0; k < pls; k++) {
+//                    struct nand_plane *p = &(l->pl[k]);
+//                    for (m = 0; m < blks; m++) {
+//                        struct nand_block *b = &(p->blk[m]);
+//                        records[b->id] = b->erase_cnt;
+////                        fprintf(fp, "%d ", b->erase_cnt);
+//                    }
+//                }
+//            }
+//        }
+//        for (i = 0; i < (n->ssd->sp).tt_blks; i++) {
+//            fprintf(fp, "%d ", records[i]);
+//        }
+//        fprintf(fp, "\n"); // 0 - 16383 are blocks ; args[16384] = '\n'
+//        fclose(fp);
+//        free(records);
+//    } else {
+//        perror("Error");
+//        printf("Endurance log file open error!\n");
+//    }
+
     uint64_t prp1 = le64_to_cpu(cmd->dptr.prp1);
     uint64_t prp2 = le64_to_cpu(cmd->dptr.prp2);
 
