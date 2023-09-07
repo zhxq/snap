@@ -694,6 +694,8 @@ static Property femu_props[] = {
     DEFINE_PROP_BOOL("enable_hetero_sbsize", FemuCtrl, enable_hetero_sbsize, false),
     DEFINE_PROP_UINT32("virt_id", FemuCtrl, virt_id, 0),
     DEFINE_PROP_STRING("decay_period", FemuCtrl, decay_period_str),
+    DEFINE_PROP_UINT32("max_erase_limit", FemuCtrl, max_erase_limit, 150),
+    DEFINE_PROP_UINT32("erase_acceleration", FemuCtrl, erase_acceleration, 1),
     DEFINE_PROP_END_OF_LIST(),
 };
 

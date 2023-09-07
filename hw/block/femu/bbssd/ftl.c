@@ -452,6 +452,7 @@ static void ssd_init_lines(struct ssd *ssd)
             block_mgmt = &lun_mgmt->lun[j];
             block_mgmt->free_blocks_cnt = spp->blks_per_lun;
             QTAILQ_INIT(&block_mgmt->free_block_list);
+            QTAILQ_INIT(&block_mgmt->bad_block_list);
             for (k = 0; k < spp->blks_per_pl; k++){
                 block_num = g_malloc0(sizeof(struct block_num));
                 block_num->block_num = k;
@@ -906,7 +907,7 @@ void ssd_init(FemuCtrl *n)
     struct ssd *ssd = n->ssd;
     ssd->pages_from_host = 0;
     ssd->pages_from_gc = 0;
-
+    ssd->pages_read = 0;
     struct ssdparams *spp = &ssd->sp;
 
     ftl_assert(ssd);
@@ -914,6 +915,11 @@ void ssd_init(FemuCtrl *n)
     spp->default_channels_per_line = n->default_channels_per_line;
     spp->default_luns_per_channel = n->default_luns_per_channel;
     spp->init_blk_per_plane = n->init_blk_per_plane;
+    spp->max_erase_limit = n->max_erase_limit;
+    spp->erase_acceleration = n->erase_acceleration;
+    spp->blocked_read_cnt = 0;
+    spp->blocked_write_cnt = 0;
+    spp->read_retry_cnt = 0;
     if (qemu_strtod(n->decay_period_str, &pEnd, &spp->decay) != 0){
         ftl_err("Error when setting decay period!");
         abort();
@@ -1101,6 +1107,7 @@ static uint64_t ssd_advance_status(struct ssd *ssd, struct ppa *ppa, struct
         nand_cmd *ncmd)
 {
     int c = ncmd->cmd;
+    struct nand_block *blk = get_blk(ssd, ppa);
     uint64_t cmd_stime = (ncmd->stime == 0) ? \
         qemu_clock_get_ns(QEMU_CLOCK_REALTIME) : ncmd->stime;
     uint64_t nand_stime;
@@ -1113,7 +1120,11 @@ static uint64_t ssd_advance_status(struct ssd *ssd, struct ppa *ppa, struct
         /* read: perform NAND cmd first */
         nand_stime = (lun->next_lun_avail_time < cmd_stime) ? cmd_stime : \
                      lun->next_lun_avail_time;
-        lun->next_lun_avail_time = nand_stime + spp->pg_rd_lat;
+        if (cmd_stime < lun->next_lun_avail_time){
+            spp->blocked_read_cnt++;
+        }
+        spp->read_retry_cnt += (blk->erase_cnt / 50);
+        lun->next_lun_avail_time = nand_stime + spp->pg_rd_lat + (blk->erase_cnt / 50);
         lat = lun->next_lun_avail_time - cmd_stime;
 #if 0
         lun->next_lun_avail_time = nand_stime + spp->pg_rd_lat;
@@ -1131,6 +1142,9 @@ static uint64_t ssd_advance_status(struct ssd *ssd, struct ppa *ppa, struct
         /* write: transfer data through channel first */
         nand_stime = (lun->next_lun_avail_time < cmd_stime) ? cmd_stime : \
                      lun->next_lun_avail_time;
+        if (cmd_stime < lun->next_lun_avail_time){
+            spp->blocked_write_cnt++;
+        }
         if (ncmd->type == USER_IO) {
             lun->next_lun_avail_time = nand_stime + spp->pg_wr_lat;
         } else {
@@ -1295,14 +1309,21 @@ static void mark_block_free(struct ssd *ssd, struct ppa *ppa)
     block_num->block_num = ppa->g.blk;
     // write_log("Breaking i: %d, j: %d, channel: %d, lun: %d, block: %d\n", i, j, channel, lun, block_num->block_num);
     // fflush(NULL);
-    QTAILQ_INSERT_TAIL(&(ssd->channel_mgmt.channel[ppa->g.ch].lun[ppa->g.lun].free_block_list), block_num, entry);
-    ssd->channel_mgmt.channel[ppa->g.ch].lun[ppa->g.lun].free_blocks_cnt++;
+    // Add erase endurance limit
+    // Do not put the block back to the free block queue if it reaches its erase count limit
+    if (blk->erase_cnt < spp->max_erase_limit){
+        QTAILQ_INSERT_TAIL(&(ssd->channel_mgmt.channel[ppa->g.ch].lun[ppa->g.lun].free_block_list), block_num, entry);
+        ssd->channel_mgmt.channel[ppa->g.ch].lun[ppa->g.lun].free_blocks_cnt++;
+    }else{
+        QTAILQ_INSERT_TAIL(&(ssd->channel_mgmt.channel[ppa->g.ch].lun[ppa->g.lun].bad_block_list), block_num, entry);
+        ssd->channel_mgmt.channel[ppa->g.ch].lun[ppa->g.lun].bad_blocks_cnt++;
+    }
 
     /* reset block status */
     ftl_assert(blk->npgs == spp->pgs_per_blk);
     blk->ipc = 0;
     blk->vpc = 0;
-    blk->erase_cnt++;
+    blk->erase_cnt += spp->erase_acceleration;
 }
 
 static void gc_read_page(struct ssd *ssd, struct ppa *ppa)
@@ -1705,6 +1726,7 @@ static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
     /* normal IO read path */
 
     // Do real reads
+    ssd->pages_read += (end_lpn - start_lpn + 1);
     maxlat = ssd_read_pages(ssd, start_lpn, end_lpn);
     write_log("read 8\n");
     return maxlat;  

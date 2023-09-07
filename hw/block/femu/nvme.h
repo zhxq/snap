@@ -1386,6 +1386,8 @@ typedef struct FemuCtrl {
     bool            enable_hetero_sbsize;
     uint32_t        virt_id;
     char*           decay_period_str;
+    uint32_t        max_erase_limit;
+    uint32_t        erase_acceleration;
 } FemuCtrl;
 
 typedef struct NvmePollerThreadArgument {

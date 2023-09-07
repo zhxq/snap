@@ -223,6 +223,11 @@ struct ssdparams {
     uint64_t *stripe_group_gc_end_time;
     uint64_t total_stripe_groups;
     int *stream_mapping;
+    int max_erase_limit;
+    uint64_t blocked_read_cnt;
+    uint64_t blocked_write_cnt;
+    uint64_t read_retry_cnt;
+    uint64_t erase_acceleration;
 };
 
 typedef struct line {
@@ -326,6 +331,7 @@ struct death_time_track{
 struct wa_info {
     uint64_t pages_from_host;
     uint64_t pages_from_gc;
+    uint64_t pages_read;
 };
 
 struct death_time_track {
@@ -351,7 +357,9 @@ struct block_num{
 
 struct block_mgmt {
     int free_blocks_cnt;
+    int bad_blocks_cnt;
     QTAILQ_HEAD(free_block_list, block_num) free_block_list;
+    QTAILQ_HEAD(bad_block_list, block_num) bad_block_list;
 };
 
 struct lun_mgmt{
@@ -391,6 +399,7 @@ struct ssd {
     QemuThread ftl_thread;
     uint64_t pages_from_host;
     uint64_t pages_from_gc;
+    uint64_t pages_read;
     struct seq_write_info *seq_info;
     struct channel_mgmt channel_mgmt;
 };
