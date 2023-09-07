@@ -1556,10 +1556,7 @@ static int do_gc(struct ssd *ssd, bool force)
     struct ppa ppa;
     int ch, lun;
     int loopi, loopj;
-    int i, j;
     int result = -1;
-    int channel_end = spp->nchs;
-    int lun_end = spp->luns_per_ch;
     bool no_gc_for_this_stripe_group = false;
     uint64_t ts = qemu_clock_get_us(QEMU_CLOCK_REALTIME);
     ppa.ppa = 0;
@@ -1568,7 +1565,7 @@ static int do_gc(struct ssd *ssd, bool force)
 
         for (loopi = 0; loopi < spp->nchs; loopi++){
             // write_log("[8, %d, %d, %d, %d]\n", loopi, loopj, i, j);
-            if (!should_gc_channel_lun(ssd, i, j, force)){
+            if (!should_gc_channel_lun(ssd, loopi, loopj, force)){
                 continue;
             }
             if (!force){
@@ -1593,7 +1590,7 @@ static int do_gc(struct ssd *ssd, bool force)
                 }
             }
             
-            victim_line = select_victim_line(ssd, i, j, force);
+            victim_line = select_victim_line(ssd, loopi, loopj, force);
             if (!victim_line) {
                 continue;
             }else{
