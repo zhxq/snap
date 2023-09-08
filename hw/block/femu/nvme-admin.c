@@ -1,4 +1,5 @@
 #include "./nvme.h"
+#include "./bbssd/ftl.h"
 
 #define NVME_IDENTIFY_DATA_SIZE 4096
 
@@ -703,6 +704,67 @@ static uint16_t nvme_error_log_info(FemuCtrl *n, NvmeCmd *cmd, uint32_t buf_len)
 
 static uint16_t nvme_smart_info(FemuCtrl *n, NvmeCmd *cmd, uint32_t buf_len)
 {
+    FILE *fp_wa = NULL;
+    struct line_mgmt *lm = &(n->ssd->lm);
+    struct ssd *ssd = n->ssd;
+    double wa = (ssd->pages_from_host + ssd->pages_from_gc + ssd->pages_from_parity)*1.0 / ssd->pages_from_host;
+    struct line *line;
+    struct ssdparams *spp = &ssd->sp;
+    struct channel_mgmt *channel_mgmt = &ssd->channel_mgmt;
+    struct lun_mgmt *lun_mgmt;
+    struct block_mgmt *block_mgmt;
+    unsigned long long util = 0;
+    unsigned long long total_ec = 0;
+    int bad_blocks_cnt;
+    int chs = (n->ssd->sp).nchs;
+    int luns = (n->ssd->sp).luns_per_ch;
+    int pls = (n->ssd->sp).pls_per_lun;
+    int blks = (n->ssd->sp).blks_per_pl;
+    int i,j,k,m = 0;
+    int* records = g_malloc0(sizeof(int) * (n->ssd->sp).tt_blks);
+    for (i = 0; i < chs; i++) {
+        struct ssd_channel *c = &(n->ssd->ch[i]);
+        lun_mgmt = &channel_mgmt->channel[i];
+        for (j = 0; j < luns; j++) {
+            struct nand_lun *l = &(c->lun[j]);
+            block_mgmt = &lun_mgmt->lun[j];
+            bad_blocks_cnt += block_mgmt->bad_blocks_cnt;
+            for (k = 0; k < pls; k++) {
+                struct nand_plane *p = &(l->pl[k]);
+                for (m = 0; m < blks; m++) {
+                    struct nand_block *b = &(p->blk[m]);
+                    records[b->id] = b->erase_cnt;
+                    util += b->vpc;
+                    total_ec += b->erase_cnt;
+                }
+            }
+        }
+    }
+    fp_wa = fopen("/media/tmp_sdc/snap/build-femu/wa.log", "a+");
+    fprintf(fp_wa, "WA=%.3f, avg_ec: %d, CV_moderate: %d, acceleration: %d, util: %.1f(GB), pages from Host: %"PRIu64", pages from GC: %"PRIu64", pages from parity: %"PRIu64", read retry: %"PRIu64", bad_blocks_cnt = %d, pages_from_host_read=%"PRIu64", host_read_block=%"PRIu64", host_write_block=%"PRIu64"\n", wa, total_ec/(ssd->sp).tt_blks, 0, 2, util*4.0/1024/1024, ssd->pages_from_host, ssd->pages_from_gc, ssd->pages_from_parity, spp->read_retry_cnt, bad_blocks_cnt, ssd->pages_read, spp->blocked_read_cnt, spp->blocked_write_cnt);
+    fclose(fp_wa);
+
+    spp->blocked_read_cnt = 0;
+    spp->blocked_write_cnt = 0;
+    ssd->pages_read = 0;
+    ssd->pages_from_gc = 0;
+    ssd->pages_from_host = 0;
+    ssd->pages_from_parity = 0;
+    spp->read_retry_cnt = 0;
+
+    FILE *fp= fopen("/media/tmp_sdc/snap/build-femu/ec.log", "a+");
+    if (fp != NULL) {
+        for (i = 0; i < (n->ssd->sp).tt_blks; i++) {
+            fprintf(fp, "%d ", records[i]);
+        }
+        fprintf(fp, "\n"); // 0 - 16383 are blocks ; args[16384] = '\n'
+        fclose(fp);
+        free(records);
+    } else {
+        perror("Error");
+        printf("Endurance log file open error!\n");
+    }
+
     uint64_t prp1 = le64_to_cpu(cmd->dptr.prp1);
     uint64_t prp2 = le64_to_cpu(cmd->dptr.prp2);
 

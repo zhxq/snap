@@ -743,6 +743,14 @@ static void ssd_init_params(struct ssdparams *spp)
     //spp->min_channels_per_line = spp->nchs / spp->channel_regions;
     //spp->min_channels_per_line = spp->default_channels_per_line;
 
+    spp->secsz = 512;
+    spp->secs_per_pg = 8; /* Page = 4KiB*/
+    spp->pgs_per_blk = 256*4; /* BLK = 4MiB */
+    spp->blks_per_pl = 256*2; /* 128GiB */
+    spp->pls_per_lun = 1;
+    spp->luns_per_ch = 8;
+    spp->nchs = 8;
+
     spp->pg_rd_lat = NAND_READ_LATENCY;
     spp->pg_wr_lat = NAND_PROG_LATENCY;
     spp->blk_er_lat = NAND_ERASE_LATENCY;
@@ -812,6 +820,8 @@ static void ssd_init_nand_blk(struct nand_block *blk, struct ssdparams *spp)
     blk->vpc = 0;
     blk->erase_cnt = 0;
     blk->wp = 0;
+    blk->id = ssd->cnt;
+    ssd->cnt++;
 }
 
 static void ssd_init_nand_plane(struct nand_plane *pl, struct ssdparams *spp)
@@ -906,7 +916,6 @@ void ssd_init(FemuCtrl *n)
     ssd->pages_from_host = 0;
     ssd->pages_from_gc = 0;
     ssd->pages_read = 0;
-    ssd->pages_from_parity = 0;
     struct ssdparams *spp = &ssd->sp;
 
     ftl_assert(ssd);
@@ -1556,7 +1565,10 @@ static int do_gc(struct ssd *ssd, bool force)
     struct ppa ppa;
     int ch, lun;
     int loopi, loopj;
+    int i, j;
     int result = -1;
+    int channel_end = spp->nchs;
+    int lun_end = spp->luns_per_ch;
     bool no_gc_for_this_stripe_group = false;
     uint64_t ts = qemu_clock_get_us(QEMU_CLOCK_REALTIME);
     ppa.ppa = 0;
@@ -1565,7 +1577,7 @@ static int do_gc(struct ssd *ssd, bool force)
 
         for (loopi = 0; loopi < spp->nchs; loopi++){
             // write_log("[8, %d, %d, %d, %d]\n", loopi, loopj, i, j);
-            if (!should_gc_channel_lun(ssd, loopi, loopj, force)){
+            if (!should_gc_channel_lun(ssd, i, j, force)){
                 continue;
             }
             if (!force){
@@ -1590,7 +1602,7 @@ static int do_gc(struct ssd *ssd, bool force)
                 }
             }
             
-            victim_line = select_victim_line(ssd, loopi, loopj, force);
+            victim_line = select_victim_line(ssd, i, j, force);
             if (!victim_line) {
                 continue;
             }else{
@@ -1965,7 +1977,6 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
         curlat = ssd_advance_status(ssd, &ppa, &swr);
         maxlat = (curlat > maxlat) ? curlat : maxlat;
         write_log("write 18\n");
-        ssd->pages_from_parity++;
         // write_log("debug 16\n");
     }
 

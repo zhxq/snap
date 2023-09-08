@@ -110,6 +110,8 @@ struct nand_page {
     int status;
 };
 
+static inline struct nand_block *get_blk(struct ssd *ssd, struct ppa *ppa);
+
 struct nand_block {
     struct nand_page *pg;
     int npgs;
