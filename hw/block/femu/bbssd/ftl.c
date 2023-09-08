@@ -1743,6 +1743,55 @@ static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
 }
 
 
+static uint64_t write_stripe_group_parity(struct ssd *ssd, NvmeRequest *req, uint64_t start_stripe_group, uint64_t end_stripe_group){
+    uint64_t stripe_group;
+    struct ppa ppa;
+    int parity_stream = 0;
+    uint64_t curlat = 0, maxlat = 0;
+    ppa.ppa = 0;
+    for (stripe_group = start_stripe_group; stripe_group <= end_stripe_group; stripe_group++){
+        // Get the PPA of the parity page (remember parity pages do not have any LBA)
+        // Invalidate old parity page
+        write_log("write 20 stripe_group: %"PRIu64"\n", stripe_group);
+        ppa = get_stripe_group_maptbl_ent(ssd, stripe_group);
+        if (mapped_ppa(&ppa)) {
+            write_log("write 20.1 old ppa: %"PRIu64"\n", ppa.ppa);
+            write_log("write 20.2 line id: %d\n", get_line(ssd, &ppa)->id);
+            /* update old page information first */
+            // write_log("debug 8.3\n");
+            
+            mark_page_invalid(ssd, &ppa);
+            // write_log("debug 8.4\n");
+            
+            // Do not set rmap, since parity pages don't have LBA
+            // But we need to set stripe group rmap for GC use
+            set_stripe_group_rmap_ent(ssd, INVALID_STRIPE_GROUP, &ppa);
+        }
+        write_log("write 21 old ppa: %"PRIu64"\n", ppa.ppa);
+        // Get new parity page
+        parity_stream = get_stripe_group_parity_stream(ssd, stripe_group);
+        write_log("write 22 parity stream: %d\n", parity_stream);
+        ppa = get_new_page(ssd, parity_stream);
+        write_log("write 23 new ppa: %"PRIu64"\n", ppa.ppa);
+        set_stripe_group_maptbl_ent(ssd, stripe_group, &ppa);
+        write_log("write 24\n");
+        set_stripe_group_rmap_ent(ssd, stripe_group, &ppa);
+        write_log("write 25\n");
+        mark_page_valid(ssd, &ppa);
+        write_log("write 26\n");
+        ssd_advance_write_pointer(ssd, parity_stream);
+        write_log("write 27\n");
+        struct nand_cmd swr;
+        swr.type = USER_IO;
+        swr.cmd = NAND_WRITE;
+        swr.stime = req->stime;
+        /* get latency statistics */
+        curlat = ssd_advance_status(ssd, &ppa, &swr);
+        maxlat = (curlat > maxlat) ? curlat : maxlat;
+        write_log("write 28\n");
+    }
+}
+
 static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
 {
     // write_log("debug 1\n");
@@ -1924,48 +1973,8 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
     // we need to calculate how many pages we write to each stripe group
     // and write to respective LUNs respectively
     write_log("write 19\n");
-    for (stripe_group = start_stripe_group; stripe_group <= end_stripe_group; stripe_group++){
-        // Get the PPA of the parity page (remember parity pages do not have any LBA)
-        // Invalidate old parity page
-        write_log("write 20 stripe_group: %"PRIu64"\n", stripe_group);
-        ppa = get_stripe_group_maptbl_ent(ssd, stripe_group);
-        if (mapped_ppa(&ppa)) {
-            write_log("write 20.1 old ppa: %"PRIu64"\n", ppa.ppa);
-            write_log("write 20.2 line id: %d\n", get_line(ssd, &ppa)->id);
-            /* update old page information first */
-            // write_log("debug 8.3\n");
-            
-            mark_page_invalid(ssd, &ppa);
-            // write_log("debug 8.4\n");
-            
-            // Do not set rmap, since parity pages don't have LBA
-            // But we need to set stripe group rmap for GC use
-            set_stripe_group_rmap_ent(ssd, INVALID_STRIPE_GROUP, &ppa);
-        }
-        write_log("write 21 old ppa: %"PRIu64"\n", ppa.ppa);
-        // Get new parity page
-        parity_stream = get_stripe_group_parity_stream(ssd, stripe_group);
-        write_log("write 22 parity stream: %d\n", parity_stream);
-        ppa = get_new_page(ssd, parity_stream);
-        write_log("write 23 new ppa: %"PRIu64"\n", ppa.ppa);
-        set_stripe_group_maptbl_ent(ssd, stripe_group, &ppa);
-        write_log("write 24\n");
-        set_stripe_group_rmap_ent(ssd, stripe_group, &ppa);
-        write_log("write 25\n");
-        mark_page_valid(ssd, &ppa);
-        write_log("write 26\n");
-        ssd_advance_write_pointer(ssd, parity_stream);
-        write_log("write 27\n");
-        struct nand_cmd swr;
-        swr.type = USER_IO;
-        swr.cmd = NAND_WRITE;
-        swr.stime = req->stime;
-        /* get latency statistics */
-        curlat = ssd_advance_status(ssd, &ppa, &swr);
-        maxlat = (curlat > maxlat) ? curlat : maxlat;
-        write_log("write 28\n");
-    }
-
+    curlat = write_stripe_group_parity(ssd, req, start_stripe_group, end_stripe_group);
+    maxlat = (curlat > maxlat) ? curlat : maxlat;
     write_log("write 29\n");
     //write_log("----Write start LPN: %"PRIu64", end LPN: %"PRIu64", given stream: %d, now end----\n", start_lpn, end_lpn, dspec);
     return maxlat;
@@ -1982,6 +1991,8 @@ static void ssd_dsm(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req){
     uint64_t lpn;
     uint64_t start_lpn;
     uint64_t end_lpn;
+    uint64_t start_stripe_group;
+    uint64_t end_stripe_group;
     write_log("dsm 2\n");
     if (req->cmd.cdw11 & NVME_DSMGMT_AD){
         uint16_t nr = (req->cmd.cdw10 & 0xff) + 1;
@@ -2020,6 +2031,10 @@ static void ssd_dsm(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req){
                 }
                 write_log("dsm 7\n");
             }
+            start_stripe_group = start_lpn / (spp->nchs - 1);
+            end_stripe_group = end_lpn / (spp->nchs - 1);
+            // We also need to recreate parity when we trim pages
+            write_stripe_group_parity(ssd, req, start_stripe_group, end_stripe_group);
             write_log("dsm 8\n");
             if (spp->death_time_prediction){
                 set_latest_access_time(n, ssd, start_lpn, end_lpn, DISCARD_OP);
