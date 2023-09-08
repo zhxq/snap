@@ -705,17 +705,15 @@ static uint16_t nvme_error_log_info(FemuCtrl *n, NvmeCmd *cmd, uint32_t buf_len)
 static uint16_t nvme_smart_info(FemuCtrl *n, NvmeCmd *cmd, uint32_t buf_len)
 {
     FILE *fp_wa = NULL;
-    struct line_mgmt *lm = &(n->ssd->lm);
     struct ssd *ssd = n->ssd;
     double wa = (ssd->pages_from_host + ssd->pages_from_gc + ssd->pages_from_parity)*1.0 / ssd->pages_from_host;
-    struct line *line;
     struct ssdparams *spp = &ssd->sp;
     struct channel_mgmt *channel_mgmt = &ssd->channel_mgmt;
     struct lun_mgmt *lun_mgmt;
     struct block_mgmt *block_mgmt;
-    unsigned long long util = 0;
-    unsigned long long total_ec = 0;
-    int bad_blocks_cnt;
+    uint64_t util = 0;
+    uint64_t total_ec = 0;
+    int bad_blocks_cnt = 0;
     int chs = (n->ssd->sp).nchs;
     int luns = (n->ssd->sp).luns_per_ch;
     int pls = (n->ssd->sp).pls_per_lun;
@@ -741,7 +739,7 @@ static uint16_t nvme_smart_info(FemuCtrl *n, NvmeCmd *cmd, uint32_t buf_len)
         }
     }
     fp_wa = fopen("/media/tmp_sdc/snap/build-femu/wa.log", "a+");
-    fprintf(fp_wa, "WA=%.3f, avg_ec: %d, CV_moderate: %d, acceleration: %d, util: %.1f(GB), pages from Host: %"PRIu64", pages from GC: %"PRIu64", pages from parity: %"PRIu64", read retry: %"PRIu64", bad_blocks_cnt = %d, pages_from_host_read=%"PRIu64", host_read_block=%"PRIu64", host_write_block=%"PRIu64"\n", wa, total_ec/(ssd->sp).tt_blks, 0, 2, util*4.0/1024/1024, ssd->pages_from_host, ssd->pages_from_gc, ssd->pages_from_parity, spp->read_retry_cnt, bad_blocks_cnt, ssd->pages_read, spp->blocked_read_cnt, spp->blocked_write_cnt);
+    fprintf(fp_wa, "WA=%.3f, avg_ec: %"PRIu64", CV_moderate: %d, acceleration: %d, util: %.1f(GB), pages from Host: %"PRIu64", pages from GC: %"PRIu64", pages from parity: %"PRIu64", read retry: %"PRIu64", bad_blocks_cnt = %d, pages_from_host_read=%"PRIu64", host_read_block=%"PRIu64", host_write_block=%"PRIu64"\n", wa, total_ec/(ssd->sp).tt_blks, 0, 2, util*4.0/1024/1024, ssd->pages_from_host, ssd->pages_from_gc, ssd->pages_from_parity, spp->read_retry_cnt, bad_blocks_cnt, ssd->pages_read, spp->blocked_read_cnt, spp->blocked_write_cnt);
     fclose(fp_wa);
 
     spp->blocked_read_cnt = 0;

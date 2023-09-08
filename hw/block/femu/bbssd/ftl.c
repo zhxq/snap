@@ -820,8 +820,8 @@ static void ssd_init_nand_blk(struct nand_block *blk, struct ssdparams *spp)
     blk->vpc = 0;
     blk->erase_cnt = 0;
     blk->wp = 0;
-    blk->id = ssd->cnt;
-    ssd->cnt++;
+    blk->id = spp->blk_id_cnt;
+    spp->blk_id_cnt++;
 }
 
 static void ssd_init_nand_plane(struct nand_plane *pl, struct ssdparams *spp)
@@ -928,6 +928,7 @@ void ssd_init(FemuCtrl *n)
     spp->blocked_read_cnt = 0;
     spp->blocked_write_cnt = 0;
     spp->read_retry_cnt = 0;
+    spp->blk_id_cnt = 0;
     if (qemu_strtod(n->decay_period_str, &pEnd, &spp->decay) != 0){
         ftl_err("Error when setting decay period!");
         abort();
@@ -1565,10 +1566,7 @@ static int do_gc(struct ssd *ssd, bool force)
     struct ppa ppa;
     int ch, lun;
     int loopi, loopj;
-    int i, j;
     int result = -1;
-    int channel_end = spp->nchs;
-    int lun_end = spp->luns_per_ch;
     bool no_gc_for_this_stripe_group = false;
     uint64_t ts = qemu_clock_get_us(QEMU_CLOCK_REALTIME);
     ppa.ppa = 0;
@@ -1577,7 +1575,7 @@ static int do_gc(struct ssd *ssd, bool force)
 
         for (loopi = 0; loopi < spp->nchs; loopi++){
             // write_log("[8, %d, %d, %d, %d]\n", loopi, loopj, i, j);
-            if (!should_gc_channel_lun(ssd, i, j, force)){
+            if (!should_gc_channel_lun(ssd, loopi, loopj, force)){
                 continue;
             }
             if (!force){
@@ -1602,7 +1600,7 @@ static int do_gc(struct ssd *ssd, bool force)
                 }
             }
             
-            victim_line = select_victim_line(ssd, i, j, force);
+            victim_line = select_victim_line(ssd, loopi, loopj, force);
             if (!victim_line) {
                 continue;
             }else{
@@ -1802,6 +1800,7 @@ static uint64_t write_stripe_group_parity(struct ssd *ssd, NvmeRequest *req, uin
         maxlat = (curlat > maxlat) ? curlat : maxlat;
         write_log("write 28\n");
     }
+    return maxlat;
 }
 
 static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
@@ -1856,8 +1855,6 @@ static uint64_t ssd_write(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
     uint64_t end_stripe_group = -1;
     uint64_t start_stripe_offset = -1;
     uint64_t end_stripe_offset = -1;
-    uint64_t stripe_group;
-    int parity_stream = 0;
     // write_log("debug 4\n");
     
     // uint64_t prev_starter = start_lpn;

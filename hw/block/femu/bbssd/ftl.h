@@ -110,7 +110,6 @@ struct nand_page {
     int status;
 };
 
-static inline struct nand_block *get_blk(struct ssd *ssd, struct ppa *ppa);
 
 struct nand_block {
     struct nand_page *pg;
@@ -119,6 +118,7 @@ struct nand_block {
     int vpc; /* valid page count */
     int erase_cnt;
     int wp; /* current write pointer */
+    int id;
 };
 
 struct nand_plane {
@@ -230,6 +230,7 @@ struct ssdparams {
     uint64_t blocked_write_cnt;
     uint64_t read_retry_cnt;
     uint64_t erase_acceleration;
+    int blk_id_cnt;
 };
 
 typedef struct line {
