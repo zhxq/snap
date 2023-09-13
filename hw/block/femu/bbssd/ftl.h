@@ -427,7 +427,7 @@ uint64_t get_uptime(struct ssd *ssd);
 #define ftl_assert(expression) \
     do {fflush(NULL); assert(expression);} while (0)
 #else
-#define ftl_assert(expression)
+#define ftl_assert(expression) do {assert(expression);} while (0)
 #endif
 
 #endif
